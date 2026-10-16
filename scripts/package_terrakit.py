@@ -182,7 +182,7 @@ def create_stage(root: Path, stage: Path, binaries: dict[str, bytes], lipo: str)
         intel.write_bytes(binaries["x86_64-apple-darwin"])
         arm.write_bytes(binaries["aarch64-apple-darwin"])
         subprocess.run([lipo, "-create", str(intel), str(arm), "-output", str(macos)], check=True)
-        subprocess.run([lipo, "-verify_arch", "x86_64", "arm64", str(macos)], check=True)
+        subprocess.run([lipo, str(macos), "-verify_arch", "x86_64", "arm64"], check=True)
 
     for path, os_name, cpu, build_target, build_cpu in (
         (windows, "Windows", "x86_64", "Win64", "x86_64"),
