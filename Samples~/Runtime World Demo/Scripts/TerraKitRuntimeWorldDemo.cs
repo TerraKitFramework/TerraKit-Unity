@@ -3,6 +3,20 @@ using UnityEngine;
 
 namespace TerraKit.Samples
 {
+    // Inspector mapping from Rust prototype_id to a Unity prefab.
+    // One Poisson stage is added to the default pipeline per assigned prefab.
+    [Serializable]
+    public sealed class TerraKitScatterPrototype
+    {
+        [Min(0)] public int PrototypeId;
+        public GameObject Prefab;
+        [Min(0.01f)] public float Radius = 10f;
+        [Range(1, 10000)] public int Attempts = 30;
+        [Min(0.01f)] public float MinScale = 0.85f;
+        [Min(0.01f)] public float MaxScale = 1.15f;
+        public bool RandomRotation = true;
+    }
+
     public sealed class TerraKitRuntimeWorldDemo : MonoBehaviour
     {
         [Header("Generation")]
@@ -11,6 +25,12 @@ namespace TerraKit.Samples
         [SerializeField] private float sampleSpacing = 2f;
         [SerializeField, Range(0, 10)] private int streamRadius = 2;
         [SerializeField, Range(1, 16)] private int regionsPerStreamingBatch = 4;
+
+        [Header("Object Scattering")]
+        [Tooltip("One Poisson Scatter stage is created for each assigned prefab. Prototype IDs must be unique.")]
+        [SerializeField] private TerraKitScatterPrototype[] scatterPrototypes =
+            Array.Empty<TerraKitScatterPrototype>();
+        [SerializeField, Min(0)] private int maxScatterInstancesPerRegion = 200;
 
         [Header("Camera")]
         [SerializeField] private DemoCameraMode cameraMode = DemoCameraMode.Explore;
@@ -63,12 +83,15 @@ namespace TerraKit.Samples
 
                 _pipeline = new RuntimePipelineController();
                 _pipeline.Initialise();
+                _pipeline.ConfigureDefaultScatterPrototypes(scatterPrototypes);
 
                 _streamer = new TerraKitWorldStreamer(
                     transform,
                     _scene.TerrainMaterial,
                     _pipeline,
-                    _settings);
+                    _settings,
+                    scatterPrototypes,
+                    maxScatterInstancesPerRegion);
 
                 _cameraController = new DemoCameraController(
                     _scene.Camera,

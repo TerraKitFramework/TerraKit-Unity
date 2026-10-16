@@ -1,6 +1,3 @@
-
-    
-  
 name: Release Unity Package
 
 # Automatic promotion: only pushes to main that touch package.json are considered.
