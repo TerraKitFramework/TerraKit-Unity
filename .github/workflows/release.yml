@@ -1,68 +1,128 @@
+
+    
+  
 name: Release Unity Package
 
+# Automatic promotion: only pushes to main that touch package.json are considered.
+# A comparison below ensures edits without a version bump never create a release.
 on:
   push:
-    tags: ['v*']
+    branches:
+      - main
+    paths:
+      - package.json
 
 permissions:
   contents: read
 
+# Serialise retries for one commit without dropping releases for other commits.
 concurrency:
-  group: unity-release-${{ github.ref }}
+  group: terrakit-unity-release-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Package and publish Unity release
-    runs-on: macos-15
-    permissions:
-      contents: write
+  version:
+    name: Detect package.json version bump
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+      version: ${{ steps.check.outputs.version }}
     steps:
-      - name: Checkout full history
+      - name: Checkout with history
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Require release tag on main and matching package version
+      - name: Compare previous and current versions
+        id: check
         shell: bash
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          git fetch origin main
-          git merge-base --is-ancestor HEAD origin/main || {
-            echo 'Release tags must point to commits already merged into main' >&2
-            exit 1
-          }
-          version="$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')"
-          test "$RELEASE_TAG" = "v$version" || {
-            echo "Expected tag v$version, got $RELEASE_TAG" >&2
-            exit 1
-          }
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          current = json.loads(Path('package.json').read_text(encoding='utf-8'))['version']
+          if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', current):
+              raise SystemExit(f'Invalid package.json version: {current!r}')
+
+          before = os.environ['BEFORE_SHA']
+          if not before or set(before) == {'0'}:
+              print('No previous main revision to compare; skipping automatic release.')
+              previous = current
+          else:
+              try:
+                  previous_json = subprocess.check_output(
+                      ['git', 'show', f'{before}:package.json'], text=True)
+              except subprocess.CalledProcessError as exc:
+                  raise SystemExit('Could not read package.json from previous main commit') from exc
+              previous = json.loads(previous_json)['version']
+
+          changed = previous != current
+          print(f'Previous version: {previous}; current version: {current}')
+          print('Creating release' if changed else 'No version bump; skipping release')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'changed={str(changed).lower()}\n')
+              output.write(f'version={current}\n')
+          PY
+
+  release:
+    name: Build pinned native binaries and publish UPM release
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    runs-on: macos-15   # scripts/package_terrakit.py uses Apple's lipo.
+    permissions:
+      contents: write  # Create GitHub tag + release in THIS Unity repository.
+    steps:
+      - name: Checkout the merged main commit
+        uses: actions/checkout@v4
 
       - name: Run packaging tests
         run: python3 -m unittest discover -s tests -v
 
-      - name: Build UPM tarball using pinned upstream binaries
+      - name: Download pinned TerraKit DLLs and assemble Unity package
         env:
+          # Set TERRAKIT_RELEASE_TOKEN for private upstream TerraKit releases.
+          # It needs read access to TerraKitFramework/TerraKit.
           GH_TOKEN: ${{ secrets.TERRAKIT_RELEASE_TOKEN || github.token }}
         run: python3 scripts/package_terrakit.py --output dist
 
-      - name: Publish GitHub release
+      - name: Publish tag and GitHub Release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        shell: bash
+          PACKAGE_VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
-          upstream="$(python3 -c 'import json; p=json.load(open("terrakit-version.json")); print(p["repository"] + "@terrakit-v" + p["version"])')"
-          printf 'Unity UPM package built with native TerraKit %s.\n\nDownload the .tgz file and install from a local tarball in Unity Package Manager.\n' "$upstream" > notes.md
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists; refusing to replace an immutable release." >&2
+          tag="v${PACKAGE_VERSION}"
+
+          # Releases are immutable: don't overwrite a previously published version.
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists. Bump package.json to a new version." >&2
             exit 1
           fi
-          gh release create "$RELEASE_TAG" dist/*.tgz dist/*.sha256 \
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "Tag $tag already exists. Refusing to reuse it." >&2
+            exit 1
+          fi
+
+          upstream="$(python3 -c 'import json; p=json.load(open("terrakit-version.json")); print(p["repository"] + "@terrakit-v" + p["version"])')"
+          printf 'Unity UPM package version %s\n\nBundled native backend: %s\n\nInstall the attached .tgz through Unity Package Manager > Add package from tarball.\n' \
+            "$PACKAGE_VERSION" "$upstream" > release-notes.md
+
+          flags=()
+          [[ "$PACKAGE_VERSION" == *-* ]] && flags+=(--prerelease)
+
+          # --target pins an auto-created release tag to the exact merged commit.
+          gh release create "$tag" dist/*.tgz dist/*.sha256 \
             --repo "$GITHUB_REPOSITORY" \
-            --title "TerraKit Unity $RELEASE_TAG" \
-            --notes-file notes.md \
-            --verify-tag
+            --target "$GITHUB_SHA" \
+            --title "TerraKit Unity $tag" \
+            --notes-file release-notes.md \
+            "${flags[@]}"
+
