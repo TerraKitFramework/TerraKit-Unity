@@ -39,3 +39,14 @@ Manual fly camera:
 - mouse: look while right mouse is held
 
 Free Move currently uses Unity's legacy `Input` API. If a project is configured for the new Input System only, use Stationary, Orbiting or Explore, or adapt the small input section to the project's input actions.
+## Object scattering (Poisson Scatter)
+
+1. Import this sample through Unity Package Manager and open `RuntimeWorldDemo.unity`.
+2. Select **TerraKit Runtime World Demo** in the Hierarchy. In the **Object Scattering** section of the Inspector, expand **Scatter Prototypes** and add entries.
+3. For each entry, assign a prefab and a unique non-negative **Prototype Id** (for example `0` for trees and `1` for rocks). Adjust **Radius**, **Attempts**, **Min Scale**, **Max Scale**, and **Random Rotation**.
+4. Set **Max Scatter Instances Per Region** to cap sample GameObject overhead (default: 200). Enter Play Mode.
+5. The default runtime graph automatically adds a `terrakit.scatter.poisson` stage per configured prototype, connects each to the height field, and shows it in the pipeline panel. Use the panel to adjust parameters while playing.
+
+The generated Rust scatter points contain positions, orientations, scales and prototype IDs; Unity maps each ID to the assigned prefab and instantiates it as a child of the corresponding terrain region. When a region unloads, Unity destroys its prefab instances with the region. No prefab assets are included; use your own project prefabs.
+
+Notes: Entries without an assigned prefab are ignored. Prototype IDs must be unique. If you manually add Poisson Scatter stages from the runtime panel, set the stage's `prototype_id` to one of the configured prefab IDs, otherwise its points are ignored. `Reset to Default` restores the Inspector-driven stages. The Poisson stage uses one prototype ID per stage; **this is not weighted multi-prototype scattering**. Individual GameObjects are intended for the demo, not production-scale vegetation rendering. Scatter settings are read when the scene starts; stop and restart Play Mode after editing the Inspector list.

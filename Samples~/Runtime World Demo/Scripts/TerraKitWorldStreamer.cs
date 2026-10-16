@@ -37,11 +37,14 @@ namespace TerraKit.Samples
             Transform parent,
             Material terrainMaterial,
             RuntimePipelineController pipeline,
-            RuntimeWorldSettings settings)
+            RuntimeWorldSettings settings,
+            IReadOnlyList<TerraKitScatterPrototype> prototypes,
+            int maxScatterInstancesPerRegion)
         {
             _pipeline = pipeline;
             _settings = settings;
-            _renderer = new TerraKitRegionRenderer(parent, terrainMaterial);
+            _renderer = new TerraKitRegionRenderer(
+                parent, terrainMaterial, prototypes, maxScatterInstancesPerRegion);
             Status = "Waiting to stream terrain...";
         }
 
@@ -225,7 +228,15 @@ namespace TerraKit.Samples
                             batchCoordinates[index] + ".");
                     }
 
-                    AddLoadedRegion(batchCoordinates[index], meshResource.Mesh);
+                    // Process every scatter output, not just the last one.
+                    var scatters = generated[index].Resources
+                        .Where(resource =>
+                            resource.Kind == TerraKitBackendResourceKind.ScatterPoints &&
+                            resource.Scatter != null)
+                        .Select(resource => resource.Scatter)
+                        .ToList();
+
+                    AddLoadedRegion(batchCoordinates[index], meshResource.Mesh, scatters);
                 }
 
                 Status = "Streaming active. Camera region [" +
@@ -247,7 +258,8 @@ namespace TerraKit.Samples
 
         private void AddLoadedRegion(
             Vector2Int coordinate,
-            TerraKitGeneratedMeshData data)
+            TerraKitGeneratedMeshData data,
+            IReadOnlyList<TerraKitScatterData> scatters)
         {
             LoadedRegion old;
             if (_loadedRegions.TryGetValue(coordinate, out old))
@@ -256,7 +268,7 @@ namespace TerraKit.Samples
                 _loadedRegions.Remove(coordinate);
             }
 
-            LoadedRegion region = _renderer.Create(coordinate, data);
+            LoadedRegion region = _renderer.Create(coordinate, data, scatters);
             _loadedRegions.Add(coordinate, region);
             _generatedRegionCount++;
             AccumulateMeshDiagnostics(data);

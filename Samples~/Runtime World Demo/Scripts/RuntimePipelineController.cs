@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using UnityEngine;
 
@@ -10,6 +11,9 @@ namespace TerraKit.Samples
         private const string FlatHeightType = "terrakit.height.flat";
         private const string NoiseHeightType = "terrakit.height.noise";
         private const string HeightMeshType = "terrakit.mesh.height_field";
+        private const string PoissonScatterType = "terrakit.scatter.poisson";
+
+        private IReadOnlyList<TerraKitScatterPrototype> _defaultScatterPrototypes;
 
         private readonly Dictionary<string, TerraKitBackendStageSchema> _schemas =
             new Dictionary<string, TerraKitBackendStageSchema>();
@@ -62,6 +66,40 @@ namespace TerraKit.Samples
             return _schemas.TryGetValue(typeId, out schema);
         }
 
+        public void ConfigureDefaultScatterPrototypes(
+            IReadOnlyList<TerraKitScatterPrototype> prototypes)
+        {
+            var ids = new HashSet<int>();
+            if (prototypes != null)
+            {
+                foreach (TerraKitScatterPrototype prototype in prototypes)
+                {
+                    if (prototype == null || prototype.Prefab == null)
+                        continue;
+
+                    if (prototype.PrototypeId < 0 || !ids.Add(prototype.PrototypeId))
+                        throw new InvalidOperationException(
+                            "Scattering prototype IDs must be unique non-negative integers.");
+                    if (float.IsNaN(prototype.Radius) || prototype.Radius < 0.01f ||
+                        float.IsInfinity(prototype.Radius) ||
+                        prototype.Attempts < 1 || prototype.Attempts > 10000 ||
+                        float.IsNaN(prototype.MinScale) || float.IsInfinity(prototype.MinScale) ||
+                        float.IsNaN(prototype.MaxScale) || float.IsInfinity(prototype.MaxScale) ||
+                        prototype.MinScale < 0.01f || prototype.MaxScale < prototype.MinScale)
+                        throw new InvalidOperationException(
+                            "Invalid scattering radius, attempts or scale for prototype " +
+                            prototype.PrototypeId + ".");
+                }
+            }
+
+            if (ids.Count > 0 && !_schemas.ContainsKey(PoissonScatterType))
+                throw new InvalidOperationException(
+                    "The installed TerraKit native backend does not expose Poisson Scatter (ABI 0.2+ required).");
+
+            _defaultScatterPrototypes = prototypes;
+            ResetToDefault(false);
+        }
+
         public void ResetToDefault()
         {
             ResetToDefault(true);
@@ -89,6 +127,32 @@ namespace TerraKit.Samples
                 SetParameterDirect(noise, "lacunarity", "2");
                 SetParameterDirect(noise, "mode", "add");
                 Graph.nodes.Add(noise);
+            }
+
+            // The Rust stage emits one prototype_id per node. Adding one node
+            // per prefab allows multiple object types in the same region.
+            if (_defaultScatterPrototypes != null && _schemas.ContainsKey(PoissonScatterType))
+            {
+                foreach (TerraKitScatterPrototype prototype in _defaultScatterPrototypes)
+                {
+                    if (prototype == null || prototype.Prefab == null)
+                        continue;
+
+                    TerraKitNodeData scatter = CreateNode(PoissonScatterType);
+                    SetParameterDirect(scatter, "prototype_id",
+                        prototype.PrototypeId.ToString(CultureInfo.InvariantCulture));
+                    SetParameterDirect(scatter, "radius",
+                        prototype.Radius.ToString("R", CultureInfo.InvariantCulture));
+                    SetParameterDirect(scatter, "attempts",
+                        prototype.Attempts.ToString(CultureInfo.InvariantCulture));
+                    SetParameterDirect(scatter, "min_scale",
+                        prototype.MinScale.ToString("R", CultureInfo.InvariantCulture));
+                    SetParameterDirect(scatter, "max_scale",
+                        prototype.MaxScale.ToString("R", CultureInfo.InvariantCulture));
+                    SetParameterDirect(scatter, "random_rotation",
+                        prototype.RandomRotation ? "true" : "false");
+                    Graph.nodes.Add(scatter);
+                }
             }
 
             if (_schemas.ContainsKey(HeightMeshType))
@@ -214,7 +278,7 @@ namespace TerraKit.Samples
             TerraKitGraphCompileResult result = new TerraKitGraphCompiler().Compile(Graph);
             if (!result.Success)
             {
-                Status = "Pipeline invalid:\n• " + string.Join("\n• ", result.Errors);
+                Status = "Pipeline invalid: Graph compilation failed.";
                 return false;
             }
 
