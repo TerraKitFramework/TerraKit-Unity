@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Validate pinned TerraKit and build UPM package
+    runs-on: macos-15
+    steps:
+      - name: Checkout Unity package
+        uses: actions/checkout@v4
+
+      - name: Run packaging tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Package pinned TerraKit native libraries
+        env:
+          GH_TOKEN: ${{ secrets.TERRAKIT_RELEASE_TOKEN || github.token }}
+        run: python3 scripts/package_terrakit.py --output dist
+
+      - name: Upload integration test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terrakit-unity-ci
+          path: dist/*.tgz*
+          if-no-files-found: error

@@ -676,6 +676,8 @@ namespace TerraKit
             RequireSize<TerraKitNativeGenerationRequest3D>(40);
             RequireSize<TerraKitNativeHeightFieldView>(128);
             RequireSize<TerraKitNativeVolumeView>(136);
+            RequireSize<TerraKitNativeScatterPoint>(44);
+            RequireSize<TerraKitNativeScatterPointsView>(40);
         }
 
         private static void RequireSize<T>(int expected)

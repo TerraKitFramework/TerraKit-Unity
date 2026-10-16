@@ -8,7 +8,7 @@ namespace TerraKit
     public static class TerraKitNativeLibrary
     {
         public const uint SupportedAbiMajor = 0;
-        public const uint SupportedAbiMinor = 1;
+        public const uint SupportedAbiMinor = 2;
 
         public static TerraKitNativeStatus CheckAvailability()
         {

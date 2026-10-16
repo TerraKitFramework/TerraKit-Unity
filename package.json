@@ -1,6 +1,6 @@
 {
   "name": "com.terrakit.unity",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "TerraKit",
   "description": "Unity frontend and graph editor integration for the TerraKit native terrain-generation backend. Official release tarballs bundle the supported native runtime libraries.",
   "unity": "6000.5",

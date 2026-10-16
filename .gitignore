@@ -6,3 +6,8 @@ Runtime/Plugins/**/*.dylib
 Runtime/Plugins/**/*.dylib.meta
 Runtime/Plugins/**/*.lib
 Runtime/Plugins/**/*.lib.meta
+
+# Local package builds and Python test caches
+dist/
+__pycache__/
+*.pyc

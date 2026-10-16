@@ -24,6 +24,7 @@ namespace TerraKit.Editor
             public Vector3[] positions, normals;
             public Vector2[] texcoords;
             public int[] indices;
+            public TerraKitScatterData scatter;
         }
 
         internal static string ToJson(TerraKitGeneratedResource resource, TerraKitBackendGenerationRequest request,
@@ -39,7 +40,8 @@ namespace TerraKit.Editor
                 regionZ = request.RegionZ.ToString(CultureInfo.InvariantCulture), is3D = request.Is3D,
                 lod = request.LodLevel, cellWidth = request.CellWidth, cellHeight = request.CellHeight,
                 cellDepth = request.CellDepth, spacingX = request.SpacingX, spacingY = request.SpacingY, spacingZ = request.SpacingZ,
-                grid = resource.Grid
+                grid = resource.Grid,
+                scatter = resource.Scatter
             };
             if (resource.Mesh != null)
             {
