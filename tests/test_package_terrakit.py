@@ -77,10 +77,17 @@ class PackageTests(unittest.TestCase):
             inputs.mkdir()
             fixture_archives(inputs, "0.0.3")
             lipo = directory / "fake-lipo.sh"
-            lipo.write_text("#!/bin/sh\n"
-                            "if [ \"$1\" = '-verify_arch' ]; then exit 0; fi\n"
-                            "[ \"$1\" = '-create' ] || exit 1\n"
-                            "cat \"$2\" \"$3\" > \"$5\"\n")
+            
+            lipo.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$2\" = '-verify_arch' ]; then\n"
+                "  [ -f \"$1\" ] && [ \"$3\" = x86_64 ] && "
+                "[ \"$4\" = arm64 ] && [ \"$#\" -eq 4 ]\n"
+                "  exit $?\n"
+                "fi\n"
+                "[ \"$1\" = '-create' ] || exit 1\n"
+                "cat \"$2\" \"$3\" > \"$5\"\n"
+            )
             lipo.chmod(0o755)
             destination = packager.run(ROOT, directory / "out", inputs, str(lipo))
             with tarfile.open(destination, "r:gz") as archive:
