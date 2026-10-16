@@ -28,8 +28,8 @@ TARGET_LIBRARIES = {
     "x86_64-apple-darwin": "libterrakit.dylib",
     "aarch64-apple-darwin": "libterrakit.dylib",
 }
-# The C# bindings in Runtime/Native/TerraKitNativeLibrary.cs support ABI 0.1.x.
-SUPPORTED_ABI = (0, 1)
+# The C# bindings in Runtime/Native/TerraKitNativeLibrary.cs support ABI 0.2.x.
+SUPPORTED_ABI = (0, 2)
 
 
 def sha256(data: bytes) -> str:
@@ -135,7 +135,7 @@ def read_native_libraries(version: str, directory: Path) -> dict[str, bytes]:
             if len(abi_parts) != 3 or not all(v.isdigit() for v in abi_parts):
                 raise ValueError(f"Malformed C ABI version: {abi!r}")
             if tuple(map(int, abi_parts[:2])) != SUPPORTED_ABI:
-                raise ValueError(f"C ABI {abi} unsupported by TerraKit-Unity (requires 0.1.x)")
+                raise ValueError(f"C ABI {abi} unsupported by TerraKit-Unity (requires 0.2.x)")
             abi_versions.add(abi)
             # Verify ALL listed files, not just the shared library we're consuming.
             files = manifest["files"]

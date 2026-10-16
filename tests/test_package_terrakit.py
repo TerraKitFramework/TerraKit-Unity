@@ -26,7 +26,7 @@ def fixture_archives(directory: Path, version: str, bad_checksum: bool = False,
         files = {"lib/" + filename: ("test-native-" + target).encode(),
                  "include/terrakit.h": b"/* test */"}
         manifest = {"library_version": version, "target": target,
-                    "abi_version": "0.2.0" if bad_abi else "0.1.0",
+                    "abi_version": "0.3.0" if bad_abi else "0.2.0",
                     "files": {path: packager.sha256(data) for path, data in files.items()}}
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, "w", zipfile.ZIP_STORED) as zf:

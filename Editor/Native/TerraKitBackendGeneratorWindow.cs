@@ -825,7 +825,7 @@ namespace TerraKit.Editor
                 int output = DrawOutputSelector();
                 if (output != _outputIndex) { _outputIndex = output; _slice = _sampleX = _sampleY = 0; UpdatePreview(); }
                 var resource = CurrentResource;
-                if (resource.Mesh != null || resource.Grid != null)
+                if (resource.Mesh != null || resource.Grid != null || resource.Scatter != null)
                 {
                     DrawParameterGroup("Output Info");
                     DrawOutputInfo(resource);
@@ -839,6 +839,10 @@ namespace TerraKit.Editor
                 {
                     DrawParameterGroup("Data Preview");
                     DrawGrid(resource);
+                }
+                else if (resource.Scatter != null)
+                {
+                    EditorGUILayout.HelpBox("Scatter point positions and prototype IDs are available in Export JSON. Assign Unity prefabs by prototype ID to render them.", MessageType.Info);
                 }
                 else
                     EditorGUILayout.HelpBox("No viewer is available for this output.", MessageType.Warning);
@@ -918,7 +922,9 @@ namespace TerraKit.Editor
                         ? "JSON: original height data. Heightmap: grayscale PNG image."
                         : resource.Kind == TerraKitBackendResourceKind.DensityField
                             ? "JSON: complete 3D density data. Slice Image: current Z slice as PNG."
-                            : "JSON: complete voxel data. Slice Image: current Z slice as PNG.",
+                            : resource.Scatter != null
+                                ? "JSON: scatter placements, precise origin, rotation, scale and prototype IDs."
+                                : "JSON: complete voxel data. Slice Image: current Z slice as PNG.",
                     EditorStyles.wordWrappedMiniLabel);
             }
         }
@@ -987,6 +993,12 @@ namespace TerraKit.Editor
                 DrawIdentifier("Triangles", (mesh.Indices.Length / 3).ToString(CultureInfo.InvariantCulture));
                 DrawIdentifier("World Origin", string.Format(CultureInfo.InvariantCulture,
                     "{0}, {1}, {2}", mesh.WorldOrigin.X, mesh.WorldOrigin.Y, mesh.WorldOrigin.Z));
+            }
+            else if (resource.Scatter != null)
+            {
+                DrawIdentifier("Placements", resource.Scatter.Points.Length.ToString(CultureInfo.InvariantCulture));
+                DrawIdentifier("World Origin", string.Format(CultureInfo.InvariantCulture,
+                    "{0}, {1}, {2}", resource.Scatter.Origin.X, resource.Scatter.Origin.Y, resource.Scatter.Origin.Z));
             }
             else if (resource.Grid != null)
             {

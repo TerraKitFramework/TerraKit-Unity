@@ -89,6 +89,9 @@ namespace TerraKit
                 case TerraKitBackendResourceKind.VoxelVolume:
                     return TerraKitPortType.VoxelVolume;
 
+                case TerraKitBackendResourceKind.ScatterPoints:
+                    return TerraKitPortType.ScatterPoints;
+
                 default:
                     throw new NotSupportedException(
                         "Unsupported resource type: " + kind);

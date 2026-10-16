@@ -11,7 +11,8 @@ namespace TerraKit
         HeightField = 1,
         DensityField = 2,
         VoxelVolume = 3,
-        Mesh = 4
+        Mesh = 4,
+        ScatterPoints = 5
     }
 
     public enum TerraKitBackendParameterKind

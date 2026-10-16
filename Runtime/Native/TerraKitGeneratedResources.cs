@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using UnityEngine;
 
 namespace TerraKit
 {
@@ -55,14 +56,39 @@ namespace TerraKit
         public int Count { get { return Values != null ? Values.Length : VoxelIds.Length; } }
     }
 
+    // Native placements are local to a double-precision origin.
+    // Keep the origin separate until projecting into Unity world space.
+    [Serializable]
+    public struct TerraKitScatterPoint
+    {
+        public Vector3 LocalPosition;
+        public Quaternion Rotation;
+        public Vector3 Scale;
+        public uint PrototypeId;
+    }
+
+    [Serializable]
+    public sealed class TerraKitScatterData
+    {
+        public TerraKitDouble3 Origin;
+        public TerraKitScatterPoint[] Points;
+    }
+
     public sealed class TerraKitGeneratedResource
     {
         public TerraKitOutputDescriptor Output { get; private set; }
         public TerraKitBackendResourceKind Kind { get { return Output.Kind; } }
         public TerraKitGridData Grid { get; private set; }
         public TerraKitGeneratedMeshData Mesh { get; private set; }
+        public TerraKitScatterData Scatter { get; private set; }
         internal TerraKitGeneratedResource(TerraKitOutputDescriptor output, TerraKitGridData grid,
-            TerraKitGeneratedMeshData mesh = null) { Output = output; Grid = grid; Mesh = mesh; }
+            TerraKitGeneratedMeshData mesh = null, TerraKitScatterData scatter = null)
+        {
+            Output = output;
+            Grid = grid;
+            Mesh = mesh;
+            Scatter = scatter;
+        }
     }
 
     public sealed class TerraKitGeneratedRegion
@@ -89,6 +115,12 @@ namespace TerraKit
                     TerraKitNativeCall.ThrowIfFailed(TerraKitNativeResultMethods.GetMesh(result, output.ResourceKey, out mesh),
                         "tk_generation_result_get_mesh");
                     return new TerraKitGeneratedResource(output, null, TerraKitBackendGraphRunner.CopyMesh(mesh));
+                case TerraKitBackendResourceKind.ScatterPoints:
+                    TerraKitNativeScatterPointsView scatterView;
+                    TerraKitNativeCall.ThrowIfFailed(
+                        TerraKitNativeResultMethods.GetScatterPoints(result, output.ResourceKey, out scatterView),
+                        "tk_generation_result_get_scatter_points");
+                    return new TerraKitGeneratedResource(output, null, scatter: CopyScatter(scatterView));
                 case TerraKitBackendResourceKind.HeightField:
                     TerraKitNativeHeightFieldView height;
                     TerraKitNativeCall.ThrowIfFailed(TerraKitNativeResultMethods.GetHeight(result, output.ResourceKey, out height),
@@ -105,6 +137,33 @@ namespace TerraKit
                 default:
                     throw new NotSupportedException("Unsupported resource type: " + output.Kind);
             }
+        }
+
+        internal static TerraKitScatterData CopyScatter(TerraKitNativeScatterPointsView view)
+        {
+            int count = TerraKitNativeSize.CheckedToInt(view.PointCount, "scatter point count");
+            if (count > 0 && view.Points == IntPtr.Zero)
+                throw new InvalidOperationException("Backend returned a null scatter buffer.");
+
+            int stride = Marshal.SizeOf(typeof(TerraKitNativeScatterPoint));
+            if ((long)count * stride > int.MaxValue)
+                throw new InvalidOperationException("Backend returned too many scatter points to copy.");
+            var points = new TerraKitScatterPoint[count];
+            for (int i = 0; i < count; i++)
+            {
+                var native = (TerraKitNativeScatterPoint)Marshal.PtrToStructure(
+                    IntPtr.Add(view.Points, checked(i * stride)),
+                    typeof(TerraKitNativeScatterPoint));
+                points[i] = new TerraKitScatterPoint
+                {
+                    LocalPosition = new Vector3(native.X, native.Y, native.Z),
+                    Rotation = new Quaternion(native.RotationX, native.RotationY,
+                        native.RotationZ, native.RotationW),
+                    Scale = new Vector3(native.ScaleX, native.ScaleY, native.ScaleZ),
+                    PrototypeId = native.PrototypeId
+                };
+            }
+            return new TerraKitScatterData { Origin = view.Origin, Points = points };
         }
 
         internal static TerraKitGridData CopyHeight(TerraKitNativeHeightFieldView view)
@@ -152,6 +211,23 @@ namespace TerraKit
                 throw new InvalidOperationException("Backend returned an invalid or excessively large grid buffer.");
             return (int)expected;
         }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct TerraKitNativeScatterPoint
+    {
+        public float X, Y, Z;
+        public float RotationX, RotationY, RotationZ, RotationW;
+        public float ScaleX, ScaleY, ScaleZ;
+        public uint PrototypeId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct TerraKitNativeScatterPointsView
+    {
+        public TerraKitDouble3 Origin;
+        public IntPtr Points;
+        public UIntPtr PointCount;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -249,6 +325,8 @@ namespace TerraKit
         internal static extern int GetResourceKind(IntPtr result, ulong key, out int kind);
         [DllImport(LibraryName, EntryPoint = "tk_generation_result_get_height_field", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern int GetHeight(IntPtr result, ulong key, out TerraKitNativeHeightFieldView view);
+        [DllImport(LibraryName, EntryPoint = "tk_generation_result_get_scatter_points", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern int GetScatterPoints(IntPtr result, ulong key, out TerraKitNativeScatterPointsView view);
         [DllImport(LibraryName, EntryPoint = "tk_generation_result_get_density_field", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern int GetDensity(IntPtr result, ulong key, out TerraKitNativeVolumeView view);
         [DllImport(LibraryName, EntryPoint = "tk_generation_result_get_voxel_volume", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

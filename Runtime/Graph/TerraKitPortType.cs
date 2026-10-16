@@ -5,6 +5,7 @@ namespace TerraKit
         HeightMap,
         Mesh,
         DensityField,
-        VoxelVolume
+        VoxelVolume,
+        ScatterPoints
     }
 }
