@@ -115,14 +115,18 @@ jobs:
           printf 'Unity UPM package version %s\n\nBundled native backend: %s\n\nInstall the attached .tgz through Unity Package Manager > Add package from tarball.\n' \
             "$PACKAGE_VERSION" "$upstream" > release-notes.md
 
-          flags=()
-          [[ "$PACKAGE_VERSION" == *-* ]] && flags+=(--prerelease)
+          args=(
+            release create "$tag"
+            --repo "$GITHUB_REPOSITORY"
+            --target "$GITHUB_SHA"
+            --title "TerraKit Unity $tag"
+            --notes-file release-notes.md
+          )
 
-          # --target pins an auto-created release tag to the exact merged commit.
-          gh release create "$tag" dist/*.tgz dist/*.sha256 \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "TerraKit Unity $tag" \
-            --notes-file release-notes.md \
-            "${flags[@]}"
+          if [[ "$PACKAGE_VERSION" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+
+          gh "${args[@]}" dist/*.tgz dist/*.sha256
+
 
