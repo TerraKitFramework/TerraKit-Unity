@@ -1,0 +1,24 @@
+{
+  "name": "com.terrakit.unity",
+  "version": "0.1.3",
+  "displayName": "TerraKit",
+  "description": "Unity frontend and graph editor integration for the TerraKit native terrain-generation backend. Official release tarballs bundle the supported native runtime libraries.",
+  "unity": "6000.5",
+  "unityRelease": "6f1",
+  "keywords": [
+    "terrain",
+    "generation",
+    "graph",
+    "terrakit"
+  ],
+  "author": {
+    "name": "TerraKit"
+  },
+  "samples": [
+    {
+      "displayName": "Runtime World Demo",
+      "description": "Registry-driven runtime pipeline editor with streamed TerraKit regions and Stationary, Orbiting, Explore, and Free Move camera modes.",
+      "path": "Samples~/Runtime World Demo"
+    }
+  ]
+}

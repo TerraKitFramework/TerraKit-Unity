@@ -1,0 +1,8 @@
+Runtime/Plugins/**/*.dll
+Runtime/Plugins/**/*.dll.meta
+Runtime/Plugins/**/*.so
+Runtime/Plugins/**/*.so.meta
+Runtime/Plugins/**/*.dylib
+Runtime/Plugins/**/*.dylib.meta
+Runtime/Plugins/**/*.lib
+Runtime/Plugins/**/*.lib.meta
