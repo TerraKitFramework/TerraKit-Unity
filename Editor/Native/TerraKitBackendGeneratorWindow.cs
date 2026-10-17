@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using UnityEditor;
+using UnityEditor.Compilation;
 using UnityEngine;
 
 namespace TerraKit.Editor
@@ -92,7 +93,7 @@ namespace TerraKit.Editor
             _scene.Dispose();
             _results = null;
             _generatedGraphName = _snapshot = _generatedAt = null;
-            _regionIndex = _outputIndex = _slice = _sampleX = _sampleY = 0;
+            _regionIndex = _outputIndex = _slice = _sampleX = _sampleY = _scatterPointIndex = 0;
             SceneView.RepaintAll();
         }
 
@@ -119,7 +120,40 @@ namespace TerraKit.Editor
             window.Show();
         }
 
-        private void OnDisable() { ClearResults(); }
+        private void OnEnable()
+        {
+            // Subscribe once per window, including after a domain reload.
+            CompilationPipeline.compilationStarted -= OnCompilationStarted;
+            CompilationPipeline.compilationStarted += OnCompilationStarted;
+            AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
+            AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
+        }
+
+        private void OnCompilationStarted(object context)
+        {
+            // Clear transient Inspector targets before Unity backs up editor state.
+            PrepareForScriptReload();
+        }
+
+        private void OnBeforeAssemblyReload()
+        {
+            // Also handle reloads that do not start a new compilation cycle.
+            PrepareForScriptReload();
+        }
+
+        private void PrepareForScriptReload()
+        {
+            ClearResults();
+            _message = "Scripts are reloading. Generate the map again when reloading finishes.";
+            _messageType = MessageType.Info;
+        }
+
+        private void OnDisable()
+        {
+            CompilationPipeline.compilationStarted -= OnCompilationStarted;
+            AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
+            ClearResults();
+        }
         private void OnInspectorUpdate() { ObserveChanges(); Repaint(); }
         private void ClearTexture() { if (_preview != null) DestroyImmediate(_preview); _preview = null; }
 
@@ -146,6 +180,7 @@ namespace TerraKit.Editor
                 DrawContentPanelBackground(panel.rect);
                 DrawRequest();
                 DrawSettingsControls();
+                DrawScatterPrefabControls();
                 EditorGUILayout.Space(8);
                 using (new EditorGUILayout.HorizontalScope())
                 {
@@ -715,10 +750,10 @@ namespace TerraKit.Editor
                         resource.Grid, 0, minimum, maximum);
                 }
 
-                if (results.Any(region =>
-                        region.Resources.Any(output => output.Mesh != null)))
+                if (results.Any(region => region.Resources.Any(output =>
+                        output.Mesh != null || output.Scatter != null)))
                 {
-                    nextScene.Show(results, graphName);
+                    nextScene.Show(results, graphName, _graph.scatterPrefabs);
                 }
 
                 // Publish only after generation and preview creation succeed.
@@ -737,16 +772,25 @@ namespace TerraKit.Editor
 
                 _message = "Generated " + results.Count + " region(s), " +
                     resources.Count + " output(s) per region.";
-                _messageType = MessageType.Info;
+                if (_scene.ScatterInstanceCount > 0)
+                    _message += " Preview contains " + _scene.ScatterInstanceCount + " scatter instance(s).";
+                _messageType = string.IsNullOrEmpty(_scene.PreviewNotice)
+                    ? MessageType.Info : MessageType.Warning;
+                if (!string.IsNullOrEmpty(_scene.PreviewNotice))
+                    _message += " " + _scene.PreviewNotice;
 
-                if (_preview != null || HasMapMeshes)
+                if (_preview != null || _scene.HasSceneObjects)
                 {
                     EditorUtility.ClearProgressBar();
                     EditorUtility.DisplayDialog(
                         "Generation complete",
-                        HasMapMeshes
-                            ? "Terrain is ready in the Scene view."
-                            : "Data is ready in Results. No mesh was generated.",
+                        _scene.ScatterInstanceCount > 0
+                            ? (HasMapMeshes
+                                ? "Terrain and scatter objects are ready in the Scene view."
+                                : "Scatter objects are ready in the Scene view.")
+                            : HasMapMeshes
+                                ? "Terrain is ready in the Scene view."
+                                : "Data is ready in Results. No mesh was generated.",
                         "Close");
                 }
             }
@@ -855,6 +899,8 @@ namespace TerraKit.Editor
                 DrawContentPanelBackground(panel.rect);
                 EditorGUILayout.LabelField("2  Results", EditorStyles.boldLabel);
                 DrawGenerationSummary();
+                if (!string.IsNullOrEmpty(_scene.PreviewNotice))
+                    EditorGUILayout.HelpBox(_scene.PreviewNotice, MessageType.Warning);
                 DrawParameterGroup("Selection");
                 int region = EditorGUILayout.Popup("Region", _regionIndex,
                     _results.Select(r => TerraKitOutputScenePreview.RegionLabel(r.Request)).ToArray());
@@ -863,14 +909,14 @@ namespace TerraKit.Editor
                     string address = CurrentResource?.Output.Address;
                     _regionIndex = region;
                     _outputIndex = Math.Max(0, CurrentRegion.Resources.ToList().FindIndex(r => r.Output.Address == address));
-                    _slice = _sampleX = _sampleY = 0;
+                    _slice = _sampleX = _sampleY = _scatterPointIndex = 0;
                     UpdatePreview();
                 }
                 var request = CurrentRegion.Request;
                 if (CurrentRegion.Resources.Count == 0)
                 { EditorGUILayout.HelpBox("The pipeline completed without declared resource outputs.", MessageType.Info); return; }
                 int output = DrawOutputSelector();
-                if (output != _outputIndex) { _outputIndex = output; _slice = _sampleX = _sampleY = 0; UpdatePreview(); }
+                if (output != _outputIndex) { _outputIndex = output; _slice = _sampleX = _sampleY = _scatterPointIndex = 0; UpdatePreview(); }
                 var resource = CurrentResource;
                 if (resource.Mesh != null || resource.Grid != null || resource.Scatter != null)
                 {
@@ -884,9 +930,7 @@ namespace TerraKit.Editor
                 }
                 else if (resource.Scatter != null)
                 {
-                    EditorGUILayout.HelpBox(
-                        "Scatter point positions and prototype IDs are available in Export JSON. Assign Unity prefabs by prototype ID to render them.",
-                        MessageType.Info);
+                    DrawScatterDataPreview(resource);
                 }
                 else if (resource.Mesh == null)
                 {
@@ -895,7 +939,7 @@ namespace TerraKit.Editor
                         MessageType.Warning);
                 }
 
-                if (resource.Mesh != null)
+                if (HasMapContent)
                 {
                     DrawParameterGroup("Save");
                     using (new EditorGUILayout.HorizontalScope())
@@ -905,11 +949,11 @@ namespace TerraKit.Editor
                                 tooltip: "Save all Mesh outputs in the selected Region, with their materials. Includes a Region Prefab to preserve material assignments. Other Regions are excluded."))
                                 RunAction(() => _scene.SaveRegionMeshes(_results, _generatedGraphName, _regionIndex),
                                     "Selected Region saved with Meshes, materials and a Region Prefab.");
-                        using (new EditorGUI.DisabledScope(!HasMapMeshes))
+                        using (new EditorGUI.DisabledScope(!HasMapContent || !string.IsNullOrEmpty(_scene.PreviewNotice)))
                             if (ActionButton("Save Prefab", inline: true,
-                                tooltip: "Save all generated Regions and all Mesh outputs with their materials as one map Prefab, then place an instance at the Unity origin. Region and Output selection do not limit this save."))
-                                RunAction(() => _scene.SavePrefab(_results, _generatedGraphName),
-                                    "Complete map saved as a Prefab and placed at the Unity origin.");
+                                tooltip: "Save all Regions, Mesh outputs and mapped scatter objects as one map Prefab at the Unity origin. Region and Output selection do not limit this save."))
+                                RunAction(() => _scene.SavePrefab(_results, _generatedGraphName, _graph.scatterPrefabs),
+                                    "Complete map saved with Meshes and scatter objects, and placed at the Unity origin.");
                         GUILayout.FlexibleSpace();
                     }
                 }
@@ -965,13 +1009,13 @@ namespace TerraKit.Editor
                 }
                 EditorGUILayout.Space(4);
                 EditorGUILayout.LabelField(resource.Mesh != null
-                    ? "Save Mesh: selected Region, including all its Mesh outputs and materials. Save Prefab: all Regions with materials. Preview and PNG: complete map. JSON: selected result."
+                    ? "Save Mesh: Meshes in the selected Region. Save Prefab: all Regions, Meshes and mapped scatter objects. PNG: all map Mesh outputs. JSON: selected result."
                     : resource.Kind == TerraKitBackendResourceKind.HeightField
                         ? "JSON: original height data. Heightmap: grayscale PNG image."
                         : resource.Kind == TerraKitBackendResourceKind.DensityField
                             ? "JSON: complete 3D density data. Slice Image: current Z slice as PNG."
                             : resource.Scatter != null
-                                ? "JSON: scatter placements, precise origin, rotation, scale and prototype IDs."
+                                ? "Save Prefab: complete map with mapped scatter objects. JSON: selected scatter output, including origin, rotation, scale and prototype IDs."
                                 : "JSON: complete voxel data. Slice Image: current Z slice as PNG.",
                     EditorStyles.wordWrappedMiniLabel);
             }
@@ -1014,6 +1058,10 @@ namespace TerraKit.Editor
             foreach (char c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
             return name;
         }
+
+        private bool HasMapContent => HasMapMeshes || (_results != null &&
+            _results.Any(region => region.Resources.Any(resource =>
+                resource.Scatter != null && resource.Scatter.Points != null && resource.Scatter.Points.Length > 0)));
 
         private bool HasMapMeshes => _results != null &&
             _results.Any(region => region.Resources.Any(resource => resource.Mesh != null));

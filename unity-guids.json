@@ -11,6 +11,7 @@
   "Editor/Graph/TerraKitNodeView.cs": "611bcaf6232539607ac08817080ebb90",
   "Editor/Native": "8e703e49ab3df66cb2a69f68af761f25",
   "Editor/Native/TerraKitBackendCheckMenu.cs": "7efc708242a0e8aa344a25fbe1a5dacd",
+  "Editor/Native/TerraKitBackendGeneratorWindow.Scatter.cs": "2a46e98ce3fc4d94ae4cc00daee6842d",
   "Editor/Native/TerraKitBackendGeneratorWindow.Settings.cs": "ac90d20c363df43be8126eb150846e9a",
   "Editor/Native/TerraKitBackendGeneratorWindow.SettingsJson.cs": "4428f98d6738243bb9c51d17ad64ad23",
   "Editor/Native/TerraKitBackendGeneratorWindow.cs": "ca2dda0af0eab6b2732bd5daa527333c",
