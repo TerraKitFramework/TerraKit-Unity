@@ -374,17 +374,35 @@ namespace TerraKit.Editor
 
         private void LoadStylesheet()
         {
-            // Resolve by GUID rather than a project-relative path so this works both as an embedded/local UPM package and when the source lives under Assets/.
-            const string styleGuid = "c25911b1c96c042d99eecbaaa360179a";
-            var stylePath = AssetDatabase.GUIDToAssetPath(styleGuid);
-            var stylesheet = string.IsNullOrEmpty(stylePath)
-                ? null
-                : AssetDatabase.LoadAssetAtPath<StyleSheet>(stylePath);
+            const string packageStylePath =
+                "Packages/com.terrakit.unity/Editor/Styling/TerraKitGraph.uss";
 
-            if (stylesheet != null)
+            var stylesheet =
+                AssetDatabase.LoadAssetAtPath<StyleSheet>(packageStylePath);
+
+            // Retain the original lookup for projects using the old asset GUID.
+            if (stylesheet == null)
             {
-                rootVisualElement.styleSheets.Add(stylesheet);
+                const string originalStyleGuid =
+                    "c25911b1c96c042d99eecbaaa360179a";
+
+                string originalPath =
+                    AssetDatabase.GUIDToAssetPath(originalStyleGuid);
+
+                if (!string.IsNullOrEmpty(originalPath))
+                {
+                    stylesheet =
+                        AssetDatabase.LoadAssetAtPath<StyleSheet>(originalPath);
+                }
             }
+
+            if (stylesheet == null)
+            {
+                Debug.LogWarning("TerraKit Graph stylesheet could not be loaded.");
+                return;
+            }
+
+            rootVisualElement.styleSheets.Add(stylesheet);
         }
 
         private void CreateGraphAsset()
@@ -1152,7 +1170,7 @@ namespace TerraKit.Editor
                 "4. Click Generator. Choose the generation settings, then click Generate Map.\n\n" +
 
                 "5. In Results, use Region and Output to inspect generated resources. HeightField outputs are shown in Data Preview. " +
-                "For Mesh outputs, click Show Map Preview to view the complete map.\n\n" +
+                "Mesh outputs from all regions appear automatically in the Scene after successful generation.\n\n" +
 
                 "6. Save Mesh saves all Mesh outputs and materials in the selected Region, with a Region Prefab that preserves material assignments. " +
                 "Save Prefab saves all Regions and their materials as one reusable map Prefab.\n\n" +
@@ -1167,7 +1185,7 @@ namespace TerraKit.Editor
 
                 "3D mode requires compatible 3D stages. The current built-in HeightField stages are designed for 2D generation.\n\n" +
 
-                "Scene previews are temporary. Save the result if you want to keep it."
+                "Changing generation settings, node parameters or connections clears Results and the temporary Scene preview. Generate Map again to update them. Moving nodes on the canvas does not clear results. Save the result if you want to keep it."
             );
         }
 

@@ -48,7 +48,6 @@ namespace TerraKit.Editor
             if (_objects.Count == 0) return;
             Bounds bounds = _objects[0].GetComponent<Renderer>().bounds;
             foreach (var item in _objects) bounds.Encapsulate(item.GetComponent<Renderer>().bounds);
-            Selection.activeGameObject = _root;
             if (SceneView.lastActiveSceneView != null) SceneView.lastActiveSceneView.Frame(bounds, false);
             SceneView.RepaintAll();
         }
@@ -195,12 +194,32 @@ namespace TerraKit.Editor
             return _objects.Where(item => _objectRegions[item] == regionIndex).ToArray();
         }
 
-        private bool SaveEntries(GameObject[] objects, string suggestedName, Scene destination,
-            string dialogTitle, string description, bool placeInScene)
+        private bool SaveEntries(
+            GameObject[] objects,
+            string suggestedName,
+            Scene destination,
+            string dialogTitle,
+            string description,
+            bool placeInScene)
         {
             string path = EditorUtility.SaveFilePanelInProject(
                 dialogTitle, suggestedName, "prefab", description);
-            if (string.IsNullOrEmpty(path)) return false;
+
+            if (string.IsNullOrEmpty(path))
+                return false;
+
+            // Import folders created in the save dialog before using AssetDatabase.
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+
+            path = path.Replace('\\', '/');
+            string parent = Path.GetDirectoryName(path)?.Replace('\\', '/');
+
+            if (string.IsNullOrEmpty(parent) ||
+                !AssetDatabase.IsValidFolder(parent))
+            {
+                throw new IOException(
+                    "The save folder is not available in Unity: " + parent);
+            }
 
             return SaveEntriesToPath(objects, path, destination, placeInScene);
         }
@@ -353,10 +372,50 @@ namespace TerraKit.Editor
 
         public void Dispose()
         {
-            if (_root != null) Object.DestroyImmediate(_root);
-            foreach (var mesh in _meshes) if (mesh != null) Object.DestroyImmediate(mesh);
-            _objects.Clear(); _objectRegions.Clear(); _meshes.Clear(); _root = null; _results = null;
-            if (_exportScene.IsValid()) EditorSceneManager.ClosePreviewScene(_exportScene);
+            // Release selected preview objects before destroying them.
+            var previousSelection = Selection.objects;
+
+            var remainingSelection = previousSelection.Where(selected =>
+            {
+                if (selected == null)
+                    return false;
+
+                if (selected is Mesh mesh && _meshes.Contains(mesh))
+                    return false;
+
+                GameObject gameObject = selected as GameObject;
+
+                if (selected is Component component)
+                    gameObject = component.gameObject;
+
+                if (gameObject == null || _root == null)
+                    return true;
+
+                return gameObject != _root &&
+                    !gameObject.transform.IsChildOf(_root.transform);
+            }).ToArray();
+
+            if (remainingSelection.Length != previousSelection.Length)
+                Selection.objects = remainingSelection;
+
+            if (_root != null)
+                Object.DestroyImmediate(_root);
+
+            foreach (var mesh in _meshes)
+            {
+                if (mesh != null)
+                    Object.DestroyImmediate(mesh);
+            }
+
+            _objects.Clear();
+            _objectRegions.Clear();
+            _meshes.Clear();
+            _root = null;
+            _results = null;
+
+            if (_exportScene.IsValid())
+                EditorSceneManager.ClosePreviewScene(_exportScene);
+
             _exportScene = default;
         }
     }

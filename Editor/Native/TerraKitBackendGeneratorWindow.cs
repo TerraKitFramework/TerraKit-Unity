@@ -8,7 +8,7 @@ using UnityEngine;
 
 namespace TerraKit.Editor
 {
-    internal sealed class TerraKitBackendGeneratorWindow : EditorWindow
+    internal sealed partial class TerraKitBackendGeneratorWindow : EditorWindow
     {
         internal const int MaxRegionCount = 256;
         private const float RequestPanelWidth = 520f;
@@ -25,7 +25,7 @@ namespace TerraKit.Editor
         private Vector2 _scroll, _statusScroll;
         [SerializeField] private float _statusHeightRatio = 0.2f;
         private IReadOnlyList<TerraKitGeneratedRegion> _results;
-        private bool _resultsStale, _isGenerating;
+        private bool _isGenerating;
         private int _regionIndex, _outputIndex, _slice, _sampleX, _sampleY;
         private string _message = "Select a graph, then Generate.";
         private MessageType _messageType = MessageType.Info;
@@ -78,7 +78,7 @@ namespace TerraKit.Editor
             _observedGraph = _graph;
             _observedContent = content;
             _observedRequest = request;
-            _resultsStale = _results != null;
+            ClearResults();
             _message = _graph == null ? "Select a graph."
                 : first ? "Click Generate Map."
                 : graphChanged ? "Graph changed. Generate again."
@@ -91,9 +91,9 @@ namespace TerraKit.Editor
             ClearTexture();
             _scene.Dispose();
             _results = null;
-            _resultsStale = false;
             _generatedGraphName = _snapshot = _generatedAt = null;
             _regionIndex = _outputIndex = _slice = _sampleX = _sampleY = 0;
+            SceneView.RepaintAll();
         }
 
         internal static void OpenForGraph(TerraKitGraphAsset graph)
@@ -145,6 +145,7 @@ namespace TerraKit.Editor
             {
                 DrawContentPanelBackground(panel.rect);
                 DrawRequest();
+                DrawSettingsControls();
                 EditorGUILayout.Space(8);
                 using (new EditorGUILayout.HorizontalScope())
                 {
@@ -657,37 +658,70 @@ namespace TerraKit.Editor
             var nextScene = new TerraKitOutputScenePreview();
             Texture2D nextPreview = null;
             _isGenerating = true;
+
             try
             {
+                // A new attempt starts without previous results.
+                ClearResults();
+
                 if (!layout.Is3D) depth = 1;
+
                 var requests = BuildRegionRequests(layout, width, height, depth);
                 string graphName = _graph.name;
                 string snapshot = EditorJsonUtility.ToJson(_graph);
-                var results = new TerraKitBackendGraphRunner().GenerateResources(_graph, requests,
+
+                var results = new TerraKitBackendGraphRunner().GenerateResources(
+                    _graph,
+                    requests,
                     (completed, total) => EditorUtility.DisplayCancelableProgressBar(
-                        "TerraKit", "Generating regions: " + completed + " / " + total +
+                        "TerraKit",
+                        "Generating regions: " + completed + " / " + total +
                         " completed. Cancellation takes effect after the current region finishes.",
                         (float)completed / total));
-                int regionIndex = ((depth / 2) * height + height / 2) * width + width / 2;
+
+                int regionIndex =
+                    ((depth / 2) * height + height / 2) * width + width / 2;
+
                 var resources = results[regionIndex].Resources;
                 int outputIndex = 0;
+
                 for (int i = 0; i < resources.Count; i++)
-                    if (resources[i].Kind == TerraKitBackendResourceKind.Mesh) { outputIndex = i; break; }
-                string generatedAt = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+                {
+                    if (resources[i].Kind == TerraKitBackendResourceKind.Mesh)
+                    {
+                        outputIndex = i;
+                        break;
+                    }
+                }
+
+                string generatedAt =
+                    DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+
                 float minimum = 0, maximum = 0;
                 var resource = resources.Count == 0 ? null : resources[outputIndex];
-                if (EditorUtility.DisplayCancelableProgressBar("TerraKit", "Preparing map preview...", 1f))
+
+                if (EditorUtility.DisplayCancelableProgressBar(
+                        "TerraKit", "Preparing results...", 1f))
+                {
                     throw new OperationCanceledException("Map generation cancelled.");
+                }
+
                 if (resource?.Grid != null)
                 {
-                    TerraKitResourceExport.Range(resource.Grid, out minimum, out maximum);
-                    nextPreview = TerraKitResourceExport.Preview(resource.Grid, 0, minimum, maximum);
-                }
-                if (results.Any(r => r.Resources.Any(o => o.Mesh != null)))
-                    nextScene.Show(results, graphName);
+                    TerraKitResourceExport.Range(
+                        resource.Grid, out minimum, out maximum);
 
-                // Commit only after generation and preview creation have both succeeded.
-                ClearResults();
+                    nextPreview = TerraKitResourceExport.Preview(
+                        resource.Grid, 0, minimum, maximum);
+                }
+
+                if (results.Any(region =>
+                        region.Resources.Any(output => output.Mesh != null)))
+                {
+                    nextScene.Show(results, graphName);
+                }
+
+                // Publish only after generation and preview creation succeed.
                 _scene = nextScene;
                 nextScene = null;
                 _preview = nextPreview;
@@ -700,31 +734,46 @@ namespace TerraKit.Editor
                 _generatedGraphName = graphName;
                 _snapshot = snapshot;
                 _generatedAt = generatedAt;
-                _message = "Generated " + results.Count + " region(s), " + resources.Count + " output(s) per region.";
+
+                _message = "Generated " + results.Count + " region(s), " +
+                    resources.Count + " output(s) per region.";
                 _messageType = MessageType.Info;
-                if (_preview != null || _scene.HasVisibleMeshes)
+
+                if (_preview != null || HasMapMeshes)
                 {
                     EditorUtility.ClearProgressBar();
-                    EditorUtility.DisplayDialog("TerraKit", "Preview generated successfully.", "OK");
+                    EditorUtility.DisplayDialog(
+                        "Generation complete",
+                        HasMapMeshes
+                            ? "Terrain is ready in the Scene view."
+                            : "Data is ready in Results. No mesh was generated.",
+                        "Close");
                 }
             }
             catch (OperationCanceledException)
             {
-                _message = _results == null ? "Generation cancelled. No results were committed."
-                    : "Generation cancelled. Previous results and preview were kept.";
+                ClearResults();
+                _message =
+                    "Generation cancelled. No results are available. Generate Map to try again.";
                 _messageType = MessageType.Info;
             }
             catch (Exception exception)
             {
-                ShowError(exception, _results == null ? "Generation failed."
-                    : "Generation failed. Previous results and preview were kept.");
+                ClearResults();
+                ShowError(exception, "Generation failed. No results are available.");
             }
             finally
             {
                 nextScene?.Dispose();
-                if (nextPreview != null) DestroyImmediate(nextPreview);
+
+                if (nextPreview != null)
+                {
+                    DestroyImmediate(nextPreview);
+                }
+
                 _isGenerating = false;
                 EditorUtility.ClearProgressBar();
+                SceneView.RepaintAll();
                 Repaint();
             }
         }
@@ -806,8 +855,6 @@ namespace TerraKit.Editor
                 DrawContentPanelBackground(panel.rect);
                 EditorGUILayout.LabelField("2  Results", EditorStyles.boldLabel);
                 DrawGenerationSummary();
-                if (_resultsStale)
-                    EditorGUILayout.HelpBox("Showing the last successful generation. Current graph or settings have changed. Preview and exports still use the previous results until Generate Map succeeds.", MessageType.Warning);
                 DrawParameterGroup("Selection");
                 int region = EditorGUILayout.Popup("Region", _regionIndex,
                     _results.Select(r => TerraKitOutputScenePreview.RegionLabel(r.Request)).ToArray());
@@ -830,22 +877,23 @@ namespace TerraKit.Editor
                     DrawParameterGroup("Output Info");
                     DrawOutputInfo(resource);
                 }
-                if (resource.Mesh != null)
-                {
-                    DrawParameterGroup("Scene Preview");
-                    DrawSceneControls();
-                }
-                else if (resource.Grid != null)
+                if (resource.Grid != null)
                 {
                     DrawParameterGroup("Data Preview");
                     DrawGrid(resource);
                 }
                 else if (resource.Scatter != null)
                 {
-                    EditorGUILayout.HelpBox("Scatter point positions and prototype IDs are available in Export JSON. Assign Unity prefabs by prototype ID to render them.", MessageType.Info);
+                    EditorGUILayout.HelpBox(
+                        "Scatter point positions and prototype IDs are available in Export JSON. Assign Unity prefabs by prototype ID to render them.",
+                        MessageType.Info);
                 }
-                else
-                    EditorGUILayout.HelpBox("No viewer is available for this output.", MessageType.Warning);
+                else if (resource.Mesh == null)
+                {
+                    EditorGUILayout.HelpBox(
+                        "No viewer is available for this output.",
+                        MessageType.Warning);
+                }
 
                 if (resource.Mesh != null)
                 {
@@ -890,7 +938,7 @@ namespace TerraKit.Editor
                     if (resource.Mesh != null)
                         using (new EditorGUI.DisabledScope(!HasMapMeshes))
                             if (ActionButton("Export PNG", inline: true,
-                                tooltip: "Export the complete map as an automatically framed PNG. Preview is optional."))
+                                tooltip: "Export the complete map as an automatically framed PNG."))
                                 RunAction(() =>
                                 {
                                     string path = _scene.SaveImage(_results, _generatedGraphName);
@@ -970,19 +1018,6 @@ namespace TerraKit.Editor
         private bool HasMapMeshes => _results != null &&
             _results.Any(region => region.Resources.Any(resource => resource.Mesh != null));
 
-        private void DrawSceneControls()
-        {
-            using (new EditorGUI.DisabledScope(!HasMapMeshes))
-                if (ActionButton("Show Map Preview"))
-                    RunAction(() =>
-                    {
-                        _scene.Show(_results, _generatedGraphName);
-                        return _scene.HasVisibleMeshes;
-                    }, "Complete map preview shown successfully.");
-            EditorGUILayout.LabelField("Preview and Prefab use the complete map layout around the Unity origin.",
-                EditorStyles.wordWrappedMiniLabel);
-            EditorGUILayout.Space(6);
-        }
 
         private void DrawOutputInfo(TerraKitGeneratedResource resource)
         {
@@ -1162,12 +1197,35 @@ namespace TerraKit.Editor
 
         private void RunAction(Func<bool> action, Func<string> successMessage)
         {
-            try
+            EditorApplication.delayCall += () =>
             {
-                // Cancelled operations return false; exceptions use the existing error path.
-                if (action()) EditorUtility.DisplayDialog("TerraKit", successMessage(), "OK");
-            }
-            catch (Exception exception) { ShowError(exception, "Action failed."); }
+                if (this == null)
+                    return;
+
+                try
+                {
+                    if (!action())
+                        return;
+
+                    EditorUtility.DisplayDialog(
+                        "TerraKit",
+                        successMessage(),
+                        "OK");
+                }
+                catch (ExitGUIException)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    ShowError(exception, "Action failed.");
+                }
+                finally
+                {
+                    if (this != null)
+                        Repaint();
+                }
+            };
         }
 
         private void ShowError(Exception exception, string summary)
