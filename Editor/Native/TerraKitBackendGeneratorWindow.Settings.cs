@@ -44,7 +44,7 @@ namespace TerraKit.Editor
                         {
                             RunSettingsAction(
                                 LoadSavedSettings,
-                                "Settings loaded. Generate Map to use them.");
+                                "Settings loaded. Use Auto Preview or Generate Map to update the map.");
                         }
                     }
                 }

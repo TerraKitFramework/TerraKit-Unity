@@ -46,7 +46,7 @@ namespace TerraKit.Editor
                 {
                     RunSettingsAction(
                         ImportSettingsJson,
-                        "Settings imported. Generate Map to use them. Use Save As to keep an asset.");
+                        "Settings imported. Use Auto Preview or Generate Map to update the map. Use Save As to keep an asset.");
                 }
             }
 

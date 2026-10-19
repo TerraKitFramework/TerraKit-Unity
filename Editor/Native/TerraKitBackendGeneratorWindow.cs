@@ -27,6 +27,11 @@ namespace TerraKit.Editor
         [SerializeField] private float _statusHeightRatio = 0.2f;
         private IReadOnlyList<TerraKitGeneratedRegion> _results;
         private bool _isGenerating;
+        private const double AutoPreviewDelaySeconds = 0.6;
+        private bool _autoPreview;
+        private bool _autoPreviewPending;
+        private double _autoPreviewDue;
+        private bool _preparingForScriptReload;
         private int _regionIndex, _outputIndex, _slice, _sampleX, _sampleY;
         private string _message = "Select a graph, then Generate.";
         private MessageType _messageType = MessageType.Info;
@@ -69,7 +74,9 @@ namespace TerraKit.Editor
 
         private void ObserveChanges()
         {
-            if (_isGenerating) return;
+            if (_isGenerating || _preparingForScriptReload ||
+                EditorApplication.isCompiling ||
+                EditorApplication.isPlayingOrWillChangePlaymode) return;
             EnsureInputText();
             string content = _graph == null ? null : JsonUtility.ToJson(CreateGenerationContent(_graph));
             string request = _dimension + ":" + string.Join("\n", _inputText) + ":" + _regionsX + ":" + _regionsY + (_dimension == 1 ? ":" + _regionsZ : "");
@@ -85,6 +92,125 @@ namespace TerraKit.Editor
                 : graphChanged ? "Graph changed. Generate again."
                 : "Settings changed. Generate again.";
             _messageType = MessageType.Info;
+            QueueAutoPreview();
+        }
+
+        private void DrawAutoPreviewControls()
+        {
+            DrawParameterGroup("Preview updates");
+            using (new EditorGUI.DisabledScope(_isGenerating ||
+                _preparingForScriptReload || EditorApplication.isCompiling ||
+                EditorApplication.isPlayingOrWillChangePlaymode))
+            {
+                bool enabled = EditorGUILayout.ToggleLeft(
+                    new GUIContent("Auto Preview",
+                        "Regenerate after you stop editing nodes or generation settings."),
+                    _autoPreview);
+                if (enabled != _autoPreview)
+                {
+                    // Establish the current inputs before arming the first update.
+                    ObserveChanges();
+                    _autoPreview = enabled;
+                    if (enabled)
+                        QueueAutoPreview();
+                    else
+                    {
+                        CancelAutoPreview();
+                        _message = _results == null
+                            ? "Auto Preview is off. Click Generate Map to generate manually."
+                            : "Auto Preview is off. Current results remain available.";
+                        _messageType = MessageType.Info;
+                    }
+                }
+            }
+            DrawParameterNote(
+                "Updates after 0.6 seconds without edits, using the current map settings. " +
+                "Saved map Prefabs are unchanged. Turns off when this window closes, " +
+                "scripts reload, or Play mode starts.");
+        }
+
+        private void QueueAutoPreview()
+        {
+            CancelAutoPreview();
+            if (!_autoPreview || _graph == null || _preparingForScriptReload ||
+                EditorApplication.isCompiling ||
+                EditorApplication.isPlayingOrWillChangePlaymode) return;
+
+            _autoPreviewPending = true;
+            _autoPreviewDue = EditorApplication.timeSinceStartup + AutoPreviewDelaySeconds;
+            _message = "Auto Preview is waiting for edits to stop...";
+            _messageType = MessageType.Info;
+        }
+
+        private void CancelAutoPreview()
+        {
+            _autoPreviewPending = false;
+            _autoPreviewDue = 0;
+        }
+
+        private void OnEditorUpdate()
+        {
+            if (!_autoPreview || !_autoPreviewPending || _isGenerating ||
+                _preparingForScriptReload) return;
+            if (EditorApplication.isCompiling || EditorApplication.isUpdating ||
+                EditorApplication.isPlayingOrWillChangePlaymode) return;
+            if (EditorApplication.timeSinceStartup < _autoPreviewDue ||
+                GUIUtility.hotControl != 0) return;
+
+            try
+            {
+                // Re-read inputs at execution time, rather than capturing an old graph.
+                ObserveChanges();
+                if (!_autoPreviewPending ||
+                    EditorApplication.timeSinceStartup < _autoPreviewDue) return;
+
+                // Consume once. Invalid inputs and failures wait for another edit or a manual retry.
+                CancelAutoPreview();
+                TerraKitBackendGenerationRequest request;
+                int width, height, depth;
+                string warning;
+                if (!TryGenerationRequest(out request, out width, out height, out depth, out warning))
+                {
+                    _message = "Auto Preview is waiting for valid settings.\n" + warning;
+                    _messageType = MessageType.Warning;
+                    return;
+                }
+
+                var validation = new TerraKitGraphCompiler().Compile(_graph);
+                if (!validation.Success)
+                {
+                    _message = "Auto Preview is waiting for a valid graph:\n" +
+                        string.Join("\n", validation.ErrorIssues.Select(issue => issue.Message));
+                    _messageType = MessageType.Warning;
+                    return;
+                }
+
+                Generate(request, width, height, depth, automatic: true);
+            }
+            catch (Exception exception)
+            {
+                CancelAutoPreview();
+                _message = "Auto Preview could not update: " + exception.Message +
+                    "\nChange the inputs or click Generate Map to retry.";
+                _messageType = MessageType.Error;
+            }
+            finally
+            {
+                Repaint();
+            }
+        }
+
+        private void OnPlayModeStateChanged(PlayModeStateChange state)
+        {
+            if (state != PlayModeStateChange.ExitingEditMode &&
+                state != PlayModeStateChange.EnteredPlayMode) return;
+
+            _autoPreview = false;
+            CancelAutoPreview();
+            ClearResults();
+            _message = "Auto Preview is off in Play mode. Return to Edit mode to generate.";
+            _messageType = MessageType.Info;
+            Repaint();
         }
 
         private void ClearResults()
@@ -122,6 +248,14 @@ namespace TerraKit.Editor
 
         private void OnEnable()
         {
+            // Restoring a window never starts generation without a new user action.
+            _autoPreview = false;
+            _preparingForScriptReload = false;
+            CancelAutoPreview();
+            EditorApplication.update -= OnEditorUpdate;
+            EditorApplication.update += OnEditorUpdate;
+            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+            EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
             // Subscribe once per window, including after a domain reload.
             CompilationPipeline.compilationStarted -= OnCompilationStarted;
             CompilationPipeline.compilationStarted += OnCompilationStarted;
@@ -143,6 +277,9 @@ namespace TerraKit.Editor
 
         private void PrepareForScriptReload()
         {
+            _preparingForScriptReload = true;
+            _autoPreview = false;
+            CancelAutoPreview();
             ClearResults();
             _message = "Scripts are reloading. Generate the map again when reloading finishes.";
             _messageType = MessageType.Info;
@@ -150,6 +287,10 @@ namespace TerraKit.Editor
 
         private void OnDisable()
         {
+            _autoPreview = false;
+            CancelAutoPreview();
+            EditorApplication.update -= OnEditorUpdate;
+            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
             CompilationPipeline.compilationStarted -= OnCompilationStarted;
             AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
             ClearResults();
@@ -181,6 +322,7 @@ namespace TerraKit.Editor
                 DrawRequest();
                 DrawSettingsControls();
                 DrawScatterPrefabControls();
+                DrawAutoPreviewControls();
                 EditorGUILayout.Space(8);
                 using (new EditorGUILayout.HorizontalScope())
                 {
@@ -195,38 +337,13 @@ namespace TerraKit.Editor
                             return true;
                         }, "Request settings reset successfully.");
                     ObserveChanges();
-                    string validation;
                     TerraKitBackendGenerationRequest request;
-                    bool valid = TryRequest(out request, out validation);
-                    int width, height, depth = 1;
-                    bool validX = TryRegionCount(_regionsX, out width);
-                    bool validY = TryRegionCount(_regionsY, out height);
-                    bool validZ = _dimension == 0 || TryRegionCount(_regionsZ, out depth);
-                    string layoutError = null;
-                    if (validX && validY && validZ)
-                    {
-                        layoutError = RegionCountError(width, height, depth);
-                        if (valid && layoutError == null)
-                        {
-                            try { ValidateRegionLayout(request, width, height, depth); }
-                            catch (Exception exception) when (exception is ArgumentException ||
-                                exception is InvalidOperationException || exception is OverflowException)
-                            { layoutError = exception.Message; }
-                        }
-                    }
-                    ready = valid && validX && validY && validZ && layoutError == null;
-
-                    warnings = string.Join("\n", new[]
-                    {
-                        valid ? null : validation,
-                        validX ? null : "Regions X: Enter a positive integer.",
-                        validY ? null : "Regions Y: Enter a positive integer.",
-                        validZ ? null : "Regions Z: Enter a positive integer.",
-                        layoutError
-                    }.Where(text => !string.IsNullOrWhiteSpace(text)));
+                    int width, height, depth;
+                    ready = TryGenerationRequest(
+                        out request, out width, out height, out depth, out warnings);
 
                     GUILayout.Space(8);
-                    using (new EditorGUI.DisabledScope(!ready))
+                    using (new EditorGUI.DisabledScope(!ready || _isGenerating))
                         if (ActionButton("Generate Map", true, inline: true))
                             Generate(request, width, height, depth);
                     GUILayout.FlexibleSpace();
@@ -557,6 +674,40 @@ namespace TerraKit.Editor
             return request != null;
         }
 
+        private bool TryGenerationRequest(
+            out TerraKitBackendGenerationRequest request,
+            out int width, out int height, out int depth, out string warnings)
+        {
+            string validation;
+            bool valid = TryRequest(out request, out validation);
+            bool validX = TryRegionCount(_regionsX, out width);
+            bool validY = TryRegionCount(_regionsY, out height);
+            depth = 1;
+            bool validZ = _dimension == 0 || TryRegionCount(_regionsZ, out depth);
+            string layoutError = null;
+            if (validX && validY && validZ)
+            {
+                layoutError = RegionCountError(width, height, depth);
+                if (valid && layoutError == null)
+                {
+                    try { ValidateRegionLayout(request, width, height, depth); }
+                    catch (Exception exception) when (exception is ArgumentException ||
+                        exception is InvalidOperationException || exception is OverflowException)
+                    { layoutError = exception.Message; }
+                }
+            }
+
+            warnings = string.Join("\n", new[]
+            {
+                valid ? null : validation,
+                validX ? null : "Regions X: Enter a positive integer.",
+                validY ? null : "Regions Y: Enter a positive integer.",
+                validZ ? null : "Regions Z: Enter a positive integer.",
+                layoutError
+            }.Where(message => !string.IsNullOrWhiteSpace(message)));
+            return valid && validX && validY && validZ && layoutError == null;
+        }
+
         internal static string[] ValidateInputs(string[] text, bool volume, out TerraKitBackendGenerationRequest request)
         {
             request = null;
@@ -688,8 +839,11 @@ namespace TerraKit.Editor
             return requests;
         }
 
-        private void Generate(TerraKitBackendGenerationRequest layout, int width, int height, int depth)
+        private void Generate(TerraKitBackendGenerationRequest layout, int width, int height, int depth,
+            bool automatic = false)
         {
+            // A manual generation also consumes any scheduled automatic update.
+            CancelAutoPreview();
             var nextScene = new TerraKitOutputScenePreview();
             Texture2D nextPreview = null;
             _isGenerating = true;
@@ -753,7 +907,8 @@ namespace TerraKit.Editor
                 if (results.Any(region => region.Resources.Any(output =>
                         output.Mesh != null || output.Scatter != null)))
                 {
-                    nextScene.Show(results, graphName, _graph.scatterPrefabs);
+                    nextScene.Show(results, graphName, _graph.scatterPrefabs,
+                        frameSceneView: !automatic);
                 }
 
                 // Publish only after generation and preview creation succeed.
@@ -770,7 +925,8 @@ namespace TerraKit.Editor
                 _snapshot = snapshot;
                 _generatedAt = generatedAt;
 
-                _message = "Generated " + results.Count + " region(s), " +
+                _message = (automatic ? "Auto Preview updated: " : "Generated ") +
+                    results.Count + " region(s), " +
                     resources.Count + " output(s) per region.";
                 if (_scene.ScatterInstanceCount > 0)
                     _message += " Preview contains " + _scene.ScatterInstanceCount + " scatter instance(s).";
@@ -779,7 +935,7 @@ namespace TerraKit.Editor
                 if (!string.IsNullOrEmpty(_scene.PreviewNotice))
                     _message += " " + _scene.PreviewNotice;
 
-                if (_preview != null || _scene.HasSceneObjects)
+                if (!automatic && (_preview != null || _scene.HasSceneObjects))
                 {
                     EditorUtility.ClearProgressBar();
                     EditorUtility.DisplayDialog(
@@ -797,14 +953,23 @@ namespace TerraKit.Editor
             catch (OperationCanceledException)
             {
                 ClearResults();
-                _message =
-                    "Generation cancelled. No results are available. Generate Map to try again.";
+                _message = automatic
+                    ? "Auto Preview cancelled. No results are available. Change the inputs or click Generate Map to retry."
+                    : "Generation cancelled. No results are available. Generate Map to try again.";
                 _messageType = MessageType.Info;
             }
             catch (Exception exception)
             {
                 ClearResults();
-                ShowError(exception, "Generation failed. No results are available.");
+                if (automatic)
+                {
+                    // Automatic attempts report in this window without stealing focus or logging repeatedly.
+                    _message = "Auto Preview failed. No results are available.\n" +
+                        exception.Message + "\nChange the inputs or click Generate Map to retry.";
+                    _messageType = MessageType.Error;
+                }
+                else
+                    ShowError(exception, "Generation failed. No results are available.");
             }
             finally
             {

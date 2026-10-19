@@ -48,7 +48,8 @@ namespace TerraKit.Editor
         }
 
         internal void Show(IReadOnlyList<TerraKitGeneratedRegion> results, string graphName,
-            IReadOnlyList<TerraKitScatterPrefabMapping> scatterPrefabs = null)
+            IReadOnlyList<TerraKitScatterPrefabMapping> scatterPrefabs = null,
+            bool frameSceneView = true)
         {
             Build(results, graphName, scatterPrefabs);
             if (!HasSceneObjects)
@@ -58,6 +59,13 @@ namespace TerraKit.Editor
             }
 
             ShowAll();
+            // Automatic previews update the map without moving the Scene camera.
+            if (!frameSceneView)
+            {
+                SceneView.RepaintAll();
+                return;
+            }
+
             Bounds bounds = default;
             bool hasBounds = false;
             foreach (var item in _objects.Concat(_scatterObjects))
