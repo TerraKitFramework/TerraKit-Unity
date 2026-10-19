@@ -30,32 +30,6 @@ namespace TerraKit.Editor
             public string regionsZ;
         }
 
-        private void DrawSettingsJsonControls()
-        {
-            using (new EditorGUI.DisabledScope(_isGenerating))
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                if (ActionButton("Export Settings JSON", inline: true))
-                {
-                    RunSettingsAction(
-                        ExportSettingsJson,
-                        "Generation settings exported.");
-                }
-
-                if (ActionButton("Import Settings JSON", inline: true))
-                {
-                    RunSettingsAction(
-                        ImportSettingsJson,
-                        "Settings imported. Use Auto Preview or Generate Map to update the map. Use Save As to keep an asset.");
-                }
-            }
-
-            EditorGUILayout.HelpBox(
-                "Settings JSON contains generation request parameters. " +
-                "Nodes, connections and node parameters are stored in the Graph asset.",
-                MessageType.Info);
-        }
-
         private bool ExportSettingsJson()
         {
             var settings = CaptureSettings();

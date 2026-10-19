@@ -18,7 +18,9 @@ namespace TerraKit.Editor
         private const float ScrollViewWidthAllowance = 24f;
         private const float TwoColumnWindowWidth = RequestPanelWidth + ResultsPanelWidth
             + PanelGap + ScrollViewWidthAllowance;
+        private const float DefaultWindowWidth = RequestPanelWidth + ScrollViewWidthAllowance;
         private const float DefaultWindowHeight = 860f;
+        private const float DefaultWindowTopOffset = 60f;
 
         [SerializeField] private TerraKitGraphAsset _graph;
         [SerializeField] private string _regionsX = "3", _regionsY = "3", _regionsZ = "3";
@@ -125,8 +127,7 @@ namespace TerraKit.Editor
             }
             DrawParameterNote(
                 "Updates after 0.6 seconds without edits, using the current map settings. " +
-                "Saved map Prefabs are unchanged. Turns off when this window closes, " +
-                "scripts reload, or Play mode starts.");
+                "Saved map Prefabs are unchanged. Turns off when this window closes, scripts reload, or Play mode starts.");
         }
 
         private void QueueAutoPreview()
@@ -225,19 +226,24 @@ namespace TerraKit.Editor
 
         internal static void OpenForGraph(TerraKitGraphAsset graph)
         {
+            // Capture the Graph window before GetWindow changes the focused window.
+            var graphWindow = focusedWindow as TerraKitGraphWindow;
+            Rect anchor = graphWindow != null
+                ? graphWindow.position : EditorGUIUtility.GetMainWindowPosition();
             bool wasOpen = HasOpenInstances<TerraKitBackendGeneratorWindow>();
             var window = GetWindow<TerraKitBackendGeneratorWindow>(
                 "Backend Generator");
 
-            window.minSize = new Vector2(ResultsPanelWidth + ScrollViewWidthAllowance, 650);
+            window.minSize = new Vector2(DefaultWindowWidth, 650);
 
             if (!wasOpen && !window.docked)
             {
                 window.maximized = false;
-                var rect = window.position;
-                // Fit both fixed-width panels and leave room for the vertical scrollbar.
-                rect.size = new Vector2(TwoColumnWindowWidth, DefaultWindowHeight);
-                window.position = rect;
+                // Start as a single column aligned with the left edge of the Graph window.
+                float height = Mathf.Clamp(anchor.height - DefaultWindowTopOffset,
+                    650f, DefaultWindowHeight);
+                window.position = new Rect(anchor.x, anchor.y + DefaultWindowTopOffset,
+                    DefaultWindowWidth, height);
             }
 
             if (graph != null)
@@ -514,7 +520,7 @@ namespace TerraKit.Editor
 
         private void DrawRequest()
         {
-            EditorGUILayout.LabelField("1  Graph & request", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Step 1: Configure Generation", EditorStyles.boldLabel);
             using (new EditorGUILayout.HorizontalScope())
             {
                 GUILayout.Label(new GUIContent("Graph", "The pipeline graph to run."), GUILayout.Width(130));
@@ -714,7 +720,8 @@ namespace TerraKit.Editor
             var errors = new string[8];
             var culture = CultureInfo.InvariantCulture;
             ulong seed;
-            if (!ulong.TryParse(text[0], NumberStyles.Integer, culture, out seed)) errors[0] = InputHint(0);
+            if (!ulong.TryParse(text[0], NumberStyles.Integer, culture, out seed))
+                errors[0] = "Enter a whole number from 0 to 2^64 - 1 (e.g. 12345).";
             int lod;
             bool validLod = int.TryParse(text[1], NumberStyles.Integer, culture, out lod) && lod >= 0 && lod <= 30;
             if (!validLod) errors[1] = "Enter an integer from 0 to 30.";
@@ -1062,7 +1069,7 @@ namespace TerraKit.Editor
             using (var panel = new EditorGUILayout.VerticalScope(ContentPanelStyle))
             {
                 DrawContentPanelBackground(panel.rect);
-                EditorGUILayout.LabelField("2  Results", EditorStyles.boldLabel);
+                EditorGUILayout.LabelField("Step 2: Review Results", EditorStyles.boldLabel);
                 DrawGenerationSummary();
                 if (!string.IsNullOrEmpty(_scene.PreviewNotice))
                     EditorGUILayout.HelpBox(_scene.PreviewNotice, MessageType.Warning);
@@ -1121,6 +1128,11 @@ namespace TerraKit.Editor
                                     "Complete map saved with Meshes and scatter objects, and placed at the Unity origin.");
                         GUILayout.FlexibleSpace();
                     }
+                    EditorGUILayout.Space(4);
+                    EditorGUILayout.LabelField(
+                        "Save Mesh: Meshes and materials in the selected Region; no scatter.\n" +
+                        "Save Prefab: all Regions, Meshes, materials and mapped scatter objects.",
+                        EditorStyles.wordWrappedMiniLabel);
                 }
 
                 DrawParameterGroup("Export");
@@ -1174,13 +1186,13 @@ namespace TerraKit.Editor
                 }
                 EditorGUILayout.Space(4);
                 EditorGUILayout.LabelField(resource.Mesh != null
-                    ? "Save Mesh: Meshes in the selected Region. Save Prefab: all Regions, Meshes and mapped scatter objects. PNG: all map Mesh outputs. JSON: selected result."
+                    ? "PNG: all map Mesh outputs; no scatter. JSON: selected Region and Output."
                     : resource.Kind == TerraKitBackendResourceKind.HeightField
                         ? "JSON: original height data. Heightmap: grayscale PNG image."
                         : resource.Kind == TerraKitBackendResourceKind.DensityField
                             ? "JSON: complete 3D density data. Slice Image: current Z slice as PNG."
                             : resource.Scatter != null
-                                ? "Save Prefab: complete map with mapped scatter objects. JSON: selected scatter output, including origin, rotation, scale and prototype IDs."
+                                ? "JSON: selected scatter output, including origin, rotation, scale and prototype IDs."
                                 : "JSON: complete voxel data. Slice Image: current Z slice as PNG.",
                     EditorStyles.wordWrappedMiniLabel);
             }

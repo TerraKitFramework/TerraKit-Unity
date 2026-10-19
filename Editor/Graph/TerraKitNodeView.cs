@@ -213,7 +213,7 @@ namespace TerraKit.Editor
             {
                 titleLabel.style.minWidth = 0;
                 titleLabel.style.whiteSpace = WhiteSpace.Normal;
-                titleLabel.tooltip = title;
+                titleLabel.tooltip = string.Empty;
             }
         }
 

@@ -1004,9 +1004,7 @@ namespace TerraKit.Editor
             }
 
             inputField.AddToClassList("terrakit-parameter-input");
-            inputField.tooltip = description +
-                                 "\nValid value: " + validValueHint +
-                                 "\nDefault: " + defaultValue;
+            inputField.tooltip = string.Empty;
             fieldContainer.Add(inputField);
 
             if (!string.IsNullOrEmpty(description))
@@ -1159,11 +1157,10 @@ namespace TerraKit.Editor
             SetStatus(
                 StatusType.Info,
                 "TerraKit — Quick Start",
-                "1. Run Tools > TerraKit > Check Backend Connection.\n\n" +
-                "2. Create or select a Graph. Right-click to add nodes, connect ports, and edit node parameters in the Inspector. Save and Validate.\n\n" +
-                "3. Open Generator, set Seed and region settings, then click Generate Map. Regions are arranged around the Unity origin.\n\n" +
-                "4. Choose Region and Output to inspect results. Save Mesh saves the selected Region's Meshes and materials; Save Prefab saves the whole map, including mapped scatter.\n\n" +
-                "Auto Preview regenerates 0.6 seconds after edits stop and keeps the Scene view unchanged. Moving nodes does not regenerate. Select the Preview root and press F over Scene to frame the map.\n\n" +
+                "1. Create or select a Graph. Right-click to add nodes, connect ports, and edit node parameters in the Inspector. Save and Validate.\n\n" +
+                "2. Open Generator, set Seed and region settings, then click Generate Map. Regions are arranged around the Unity origin.\n\n" +
+                "3. Choose Region and Output to inspect results. Save Mesh saves the selected Region's Meshes and materials; Save Prefab saves the whole map, including mapped scatter.\n\n" +
+                "Auto Preview regenerates 0.6 seconds after edits stop and keeps the Scene view unchanged. Select the Preview root and press F over Scene to frame the map.\n\n" +
                 "Map scatter Prototype IDs to Prefabs in Generator, then Generate Map after mapping changes. Export JSON saves the selected output; Export PNG captures map Meshes without scatter.\n\n" +
                 "Closing Generator, reloading scripts or entering Play mode clears temporary results and turns Auto Preview off. Saved maps remain unchanged."
             );

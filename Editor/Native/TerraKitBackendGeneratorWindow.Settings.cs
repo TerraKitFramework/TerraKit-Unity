@@ -22,35 +22,63 @@ namespace TerraKit.Editor
                         typeof(TerraKitGenerationSettings),
                         false);
 
-                using (new EditorGUILayout.HorizontalScope())
+                Rect row = EditorGUILayout.GetControlRect(false, 26f);
+                const float gap = 6f;
+                const float menuWidth = 80f;
+                float buttonWidth = Mathf.Max(0f, (row.width - menuWidth - 2f * gap) / 2f);
+                var saveRect = new Rect(row.x, row.y, buttonWidth, row.height);
+                var loadRect = new Rect(saveRect.xMax + gap, row.y, buttonWidth, row.height);
+                var moreRect = new Rect(loadRect.xMax + gap, row.y, menuWidth, row.height);
+                var buttonStyle = new GUIStyle(GUI.skin.button)
                 {
-                    if (ActionButton("Save As...", inline: true))
+                    padding = new RectOffset(12, 12, 4, 4)
+                };
+
+                if (GUI.Button(saveRect, "Save Settings", buttonStyle))
+                {
+                    RunSettingsAction(
+                        SaveCurrentSettings,
+                        "Generation settings saved.");
+                }
+
+                using (new EditorGUI.DisabledScope(_settingsAsset == null))
+                {
+                    if (GUI.Button(loadRect, "Load Settings", buttonStyle))
                     {
                         RunSettingsAction(
-                            SaveSettingsAs,
-                            "Generation settings saved.");
-                    }
-
-                    using (new EditorGUI.DisabledScope(_settingsAsset == null))
-                    {
-                        if (ActionButton("Update Saved", inline: true))
-                        {
-                            RunSettingsAction(
-                                UpdateSavedSettings,
-                                "Saved settings updated.");
-                        }
-
-                        if (ActionButton("Load Settings", inline: true))
-                        {
-                            RunSettingsAction(
-                                LoadSavedSettings,
-                                "Settings loaded. Use Auto Preview or Generate Map to update the map.");
-                        }
+                            LoadSavedSettings,
+                            "Settings loaded. Use Auto Preview or Generate Map to update the map.");
                     }
                 }
+
+                if (EditorGUI.DropdownButton(moreRect, new GUIContent("More"), FocusType.Keyboard))
+                    ShowSettingsMenu(moreRect);
             }
 
-            DrawSettingsJsonControls();
+            EditorGUILayout.Space(2f);
+            DrawParameterNote(
+                "Settings assets and JSON save generation parameters. " +
+                "Nodes, connections and node parameters are saved in the Graph asset.");
+        }
+
+        private bool SaveCurrentSettings()
+        {
+            return _settingsAsset == null ? SaveSettingsAs() : UpdateSavedSettings();
+        }
+
+        private void ShowSettingsMenu(Rect buttonRect)
+        {
+            var menu = new GenericMenu();
+            menu.AddItem(new GUIContent("Save As..."), false,
+                () => RunSettingsAction(SaveSettingsAs, "Generation settings saved."));
+            menu.AddSeparator(string.Empty);
+            menu.AddItem(new GUIContent("Export JSON..."), false,
+                () => RunSettingsAction(ExportSettingsJson, "Generation settings exported."));
+            menu.AddItem(new GUIContent("Import JSON..."), false,
+                () => RunSettingsAction(ImportSettingsJson,
+                    "Settings imported. Use Auto Preview or Generate Map to update the map. " +
+                    "Use Save Settings to keep an asset."));
+            menu.DropDown(buttonRect);
         }
 
         private TerraKitGenerationSettings CaptureSettings()
@@ -98,7 +126,7 @@ namespace TerraKit.Editor
                 if (AssetDatabase.LoadMainAssetAtPath(path) != null)
                 {
                     throw new ArgumentException(
-                        "This asset already exists. Choose a new name, or use Update Saved.");
+                        "This asset already exists. Choose a new name, or select it and use Save Settings.");
                 }
 
                 AssetDatabase.CreateAsset(settings, path);
@@ -130,7 +158,7 @@ namespace TerraKit.Editor
                 !path.StartsWith("Assets/", StringComparison.Ordinal))
             {
                 throw new ArgumentException(
-                    "Select a settings asset under Assets, or use Save As.");
+                    "Select a settings asset under Assets, or use More > Save As.");
             }
 
             var settings = CaptureSettings();
