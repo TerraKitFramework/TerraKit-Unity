@@ -9,6 +9,9 @@ using UnityEngine;
 
 namespace TerraKit.Editor
 {
+    /// <summary>
+    /// Generates finite maps from a graph and manages temporary editor previews.
+    /// </summary>
     internal sealed partial class TerraKitBackendGeneratorWindow : EditorWindow
     {
         internal const int MaxRegionCount = 256;
@@ -1455,6 +1458,7 @@ namespace TerraKit.Editor
 
         private void RunAction(Func<bool> action, Func<string> successMessage)
         {
+            // Defer asset operations until the current IMGUI pass has finished.
             EditorApplication.delayCall += () =>
             {
                 if (this == null)

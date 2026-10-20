@@ -2,6 +2,9 @@ using UnityEngine;
 
 namespace TerraKit.Editor
 {
+    /// <summary>
+    /// Stores generation settings separately from graph data and prefab mappings.
+    /// </summary>
     [CreateAssetMenu(
         menuName = "TerraKit/Generation Settings",
         fileName = "TerraKitGenerationSettings")]
