@@ -37,24 +37,22 @@ namespace TerraKit.Editor
 
             using (new EditorGUI.DisabledScope(true))
             {
-                EditorGUILayout.Vector3Field(
+                DrawResultVector(
                     "Local Position", point.LocalPosition);
-                EditorGUILayout.Vector3Field(
+                DrawResultVector(
                     "Rotation (degrees)", point.Rotation.eulerAngles);
-                EditorGUILayout.Vector3Field(
+                DrawResultVector(
                     "Scale", point.Scale);
             }
 
             DrawIdentifier(
                 "World Position",
-                string.Format(
-                    CultureInfo.InvariantCulture,
-                    "{0:G17}, {1:G17}, {2:G17}",
+                FormatResultVector(
                     scatter.Origin.X + point.LocalPosition.x,
                     scatter.Origin.Y + point.LocalPosition.y,
                     scatter.Origin.Z + point.LocalPosition.z));
             DrawParameterNote(
-                "Point indices start at 0. World Position includes World Origin.");
+                "Point indices start at 0. World Position = World Origin + Local Position.");
         }
 
         private void DrawScatterPrefabControls()

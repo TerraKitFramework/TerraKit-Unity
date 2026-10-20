@@ -1244,6 +1244,39 @@ namespace TerraKit.Editor
             _results.Any(region => region.Resources.Any(resource => resource.Mesh != null));
 
 
+        private static string FormatResultNumber(double value, int decimalPlaces)
+        {
+            if (double.IsNaN(value) || double.IsInfinity(value))
+                return value.ToString(CultureInfo.InvariantCulture);
+            if (value == 0) return "0";
+
+            // Format result labels only; never round stored or exported values.
+            string format = "0." + new string('#', decimalPlaces);
+            if (Math.Abs(value) < Math.Pow(10, -decimalPlaces))
+                format += "E+0";
+            return value.ToString(format, CultureInfo.InvariantCulture);
+        }
+
+        private static string FormatResultVector(double x, double y, double z)
+        {
+            return FormatResultNumber(x, 3) + ", " + FormatResultNumber(y, 3)
+                + ", " + FormatResultNumber(z, 3);
+        }
+
+        private static void DrawResultVector(string label, Vector3 value)
+        {
+            EditorGUILayout.LabelField(label);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.LabelField("X", GUILayout.Width(12));
+                EditorGUILayout.TextField(FormatResultNumber(value.x, 3), GUILayout.MinWidth(0));
+                EditorGUILayout.LabelField("Y", GUILayout.Width(12));
+                EditorGUILayout.TextField(FormatResultNumber(value.y, 3), GUILayout.MinWidth(0));
+                EditorGUILayout.LabelField("Z", GUILayout.Width(12));
+                EditorGUILayout.TextField(FormatResultNumber(value.z, 3), GUILayout.MinWidth(0));
+            }
+        }
+
         private void DrawOutputInfo(TerraKitGeneratedResource resource)
         {
             if (resource.Mesh != null)
@@ -1251,14 +1284,14 @@ namespace TerraKit.Editor
                 var mesh = resource.Mesh;
                 DrawIdentifier("Vertices", mesh.Positions.Length.ToString(CultureInfo.InvariantCulture));
                 DrawIdentifier("Triangles", (mesh.Indices.Length / 3).ToString(CultureInfo.InvariantCulture));
-                DrawIdentifier("World Origin", string.Format(CultureInfo.InvariantCulture,
-                    "{0}, {1}, {2}", mesh.WorldOrigin.X, mesh.WorldOrigin.Y, mesh.WorldOrigin.Z));
+                DrawIdentifier("World Origin", FormatResultVector(
+                    mesh.WorldOrigin.X, mesh.WorldOrigin.Y, mesh.WorldOrigin.Z));
             }
             else if (resource.Scatter != null)
             {
                 DrawIdentifier("Placements", resource.Scatter.Points.Length.ToString(CultureInfo.InvariantCulture));
-                DrawIdentifier("World Origin", string.Format(CultureInfo.InvariantCulture,
-                    "{0}, {1}, {2}", resource.Scatter.Origin.X, resource.Scatter.Origin.Y, resource.Scatter.Origin.Z));
+                DrawIdentifier("World Origin", FormatResultVector(
+                    resource.Scatter.Origin.X, resource.Scatter.Origin.Y, resource.Scatter.Origin.Z));
             }
             else if (resource.Grid != null)
             {
@@ -1267,8 +1300,8 @@ namespace TerraKit.Editor
                 DrawIdentifier("Samples", grid.Width + " × " + grid.Height + " × " + grid.Depth);
                 DrawIdentifier("Sampling", grid.Sampling == 1 ? "Point sampled" : "Cell sampled");
                 if (grid.Values != null)
-                    DrawIdentifier("Range", _minimum.ToString("G9", CultureInfo.InvariantCulture) +
-                        " to " + _maximum.ToString("G9", CultureInfo.InvariantCulture));
+                    DrawIdentifier("Range", FormatResultNumber(_minimum, 4) +
+                        " to " + FormatResultNumber(_maximum, 4));
             }
         }
 
@@ -1286,7 +1319,7 @@ namespace TerraKit.Editor
             int index = _sampleX + grid.Width * (_sampleY + grid.Height * _slice);
             string value = grid.VoxelIds != null
                 ? grid.VoxelIds[index].ToString(CultureInfo.InvariantCulture)
-                : grid.Values[index].ToString("R", CultureInfo.InvariantCulture);
+                : FormatResultNumber(grid.Values[index], 4);
             EditorGUILayout.LabelField(grid.VoxelIds != null ? "Raw voxel ID" : "Raw sample value", value);
             if (_preview != null) DrawSamplePreview(grid, value);
             DrawResultNote(grid.VoxelIds != null ? "Colors represent voxel IDs." : "Grayscale represents sample values.",
