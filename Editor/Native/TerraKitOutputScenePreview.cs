@@ -16,6 +16,13 @@ namespace TerraKit.Editor
         private readonly Dictionary<GameObject, int> _objectRegions = new Dictionary<GameObject, int>();
         private readonly List<GameObject> _objects = new List<GameObject>();
         private readonly List<Mesh> _meshes = new List<Mesh>();
+        private readonly List<GameObject> _scatterObjects = new List<GameObject>();
+        private const int MaxScatterPreviewInstances = 10000;
+        private Dictionary<uint, GameObject> _scatterPrefabLookup = new Dictionary<uint, GameObject>();
+
+        internal int ScatterInstanceCount => _scatterObjects.Count;
+        internal bool HasSceneObjects => _objects.Count != 0 || _scatterObjects.Count != 0;
+        internal string PreviewNotice { get; private set; }
         private GameObject _root;
         private Scene _exportScene;
         private IReadOnlyList<TerraKitGeneratedRegion> _results;
@@ -40,16 +47,44 @@ namespace TerraKit.Editor
             get { return _objects.Any(item => item != null && item.activeInHierarchy); }
         }
 
-        internal void Show(IReadOnlyList<TerraKitGeneratedRegion> results, string graphName)
+        internal void Show(IReadOnlyList<TerraKitGeneratedRegion> results, string graphName,
+            IReadOnlyList<TerraKitScatterPrefabMapping> scatterPrefabs = null,
+            bool frameSceneView = true)
         {
-            if (_root == null || !ReferenceEquals(_results, results) || _objects.Any(item => item == null))
-                Build(results, graphName);
+            Build(results, graphName, scatterPrefabs);
+            if (!HasSceneObjects)
+            {
+                Dispose();
+                return;
+            }
+
             ShowAll();
-            if (_objects.Count == 0) return;
-            Bounds bounds = _objects[0].GetComponent<Renderer>().bounds;
-            foreach (var item in _objects) bounds.Encapsulate(item.GetComponent<Renderer>().bounds);
-            Selection.activeGameObject = _root;
-            if (SceneView.lastActiveSceneView != null) SceneView.lastActiveSceneView.Frame(bounds, false);
+            // Automatic previews update the map without moving the Scene camera.
+            if (!frameSceneView)
+            {
+                SceneView.RepaintAll();
+                return;
+            }
+
+            Bounds bounds = default;
+            bool hasBounds = false;
+            foreach (var item in _objects.Concat(_scatterObjects))
+            {
+                if (item == null) continue;
+                foreach (var renderer in item.GetComponentsInChildren<Renderer>())
+                {
+                    if (!renderer.enabled || !renderer.gameObject.activeInHierarchy) continue;
+                    if (!hasBounds) { bounds = renderer.bounds; hasBounds = true; }
+                    else bounds.Encapsulate(renderer.bounds);
+                }
+                if (!hasBounds)
+                {
+                    bounds = new Bounds(item.transform.position, Vector3.one);
+                    hasBounds = true;
+                }
+            }
+            if (hasBounds && SceneView.lastActiveSceneView != null)
+                SceneView.lastActiveSceneView.Frame(bounds, false);
             SceneView.RepaintAll();
         }
 
@@ -61,14 +96,22 @@ namespace TerraKit.Editor
                 item.transform.parent.gameObject.SetActive(true);
                 item.SetActive(true);
             }
+            foreach (var item in _scatterObjects)
+            {
+                if (item != null && item.transform.parent != null)
+                    item.transform.parent.gameObject.SetActive(true);
+            }
         }
 
-        private void Build(IReadOnlyList<TerraKitGeneratedRegion> results, string graphName)
+        private void Build(IReadOnlyList<TerraKitGeneratedRegion> results, string graphName,
+            IReadOnlyList<TerraKitScatterPrefabMapping> scatterPrefabs = null)
         {
             Dispose();
             try
             {
                 _root = NewObject("Preview-" + graphName, null);
+                var prefabLookup = BuildScatterPrefabLookup(scatterPrefabs);
+                _scatterPrefabLookup = prefabLookup;
                 var pipeline = GraphicsSettings.currentRenderPipeline;
                 if (pipeline == null) pipeline = GraphicsSettings.defaultRenderPipeline;
                 Material material = pipeline != null ? pipeline.defaultMaterial : null;
@@ -78,7 +121,16 @@ namespace TerraKit.Editor
                     GameObject region = null;
                     foreach (var resource in results[r].Resources)
                     {
-                        if (resource.Mesh == null) continue;
+                        if (resource.Mesh == null)
+                        {
+                            if (resource.Scatter != null && prefabLookup.Count != 0)
+                            {
+                                if (region == null)
+                                    region = NewObject("Region " + RegionLabel(results[r].Request), _root.transform);
+                                BuildScatterObjects(resource, region.transform, prefabLookup);
+                            }
+                            continue;
+                        }
                         if (region == null) region = NewObject("Region " + RegionLabel(results[r].Request), _root.transform);
                         var child = NewObject(Label(resource), region.transform);
                         var mesh = TerraKitResourceExport.CreateMesh(resource.Mesh);
@@ -98,6 +150,78 @@ namespace TerraKit.Editor
             catch { Dispose(); throw; }
         }
 
+        private static Dictionary<uint, GameObject> BuildScatterPrefabLookup(
+            IReadOnlyList<TerraKitScatterPrefabMapping> mappings)
+        {
+            var lookup = new Dictionary<uint, GameObject>();
+            var seen = new HashSet<uint>();
+            if (mappings == null) return lookup;
+
+            foreach (var mapping in mappings)
+            {
+                if (mapping == null || mapping.prototypeId < 0 || mapping.prototypeId > uint.MaxValue)
+                    continue;
+                uint id = (uint)mapping.prototypeId;
+                if (!seen.Add(id))
+                {
+                    // Ambiguous IDs must never choose a prefab based on list order.
+                    lookup.Remove(id);
+                    continue;
+                }
+                if (mapping.prefab != null && EditorUtility.IsPersistent(mapping.prefab) &&
+                    PrefabUtility.IsPartOfPrefabAsset(mapping.prefab))
+                    lookup.Add(id, mapping.prefab);
+            }
+            return lookup;
+        }
+
+        private void BuildScatterObjects(TerraKitGeneratedResource resource, Transform region,
+            Dictionary<uint, GameObject> prefabs)
+        {
+            var scatter = resource.Scatter;
+            if (scatter.Points == null) return;
+            GameObject group = null;
+            for (int index = 0; index < scatter.Points.Length; index++)
+            {
+                var point = scatter.Points[index];
+                if (!prefabs.TryGetValue(point.PrototypeId, out var prefab)) continue;
+                if (_scatterObjects.Count >= MaxScatterPreviewInstances)
+                {
+                    PreviewNotice = "Scene preview is limited to " + MaxScatterPreviewInstances +
+                        " scatter instances. Generated data and JSON export still contain all points.";
+                    return;
+                }
+
+                // Add the precise origin before converting to Unity's float coordinates.
+                var position = new Vector3(
+                    (float)(scatter.Origin.X + point.LocalPosition.x),
+                    (float)(scatter.Origin.Y + point.LocalPosition.y),
+                    (float)(scatter.Origin.Z + point.LocalPosition.z));
+                if (!IsFinite(position.x) || !IsFinite(position.y) || !IsFinite(position.z))
+                    throw new InvalidOperationException("A scatter position exceeds Unity's coordinate range.");
+
+                if (group == null) group = NewObject(Label(resource), region);
+                var instance = PrefabUtility.InstantiatePrefab(prefab, group.transform) as GameObject;
+                if (instance == null)
+                    throw new InvalidOperationException("Could not instantiate scatter prefab " + prefab.name + ".");
+
+                _scatterObjects.Add(instance);
+                instance.name = prefab.name + " [Point " + index + ", Prototype " + point.PrototypeId + "]";
+                instance.transform.localPosition = position;
+                instance.transform.localRotation = point.Rotation * prefab.transform.localRotation;
+                instance.transform.localScale = Vector3.Scale(prefab.transform.localScale, point.Scale);
+
+                // Hide only temporary instances from scene saving; shared assets remain untouched.
+                foreach (var child in instance.GetComponentsInChildren<Transform>(true))
+                    child.gameObject.hideFlags |= HideFlags.DontSaveInEditor | HideFlags.DontSaveInBuild;
+            }
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
+        }
+
         private static GameObject NewObject(string name, Transform parent)
         {
             var result = new GameObject(name);
@@ -108,35 +232,39 @@ namespace TerraKit.Editor
 
         // Export from a private snapshot without changing the live preview.
         private TerraKitOutputScenePreview PrepareExport(IReadOnlyList<TerraKitGeneratedRegion> results,
-            string graphName)
+            string graphName, IReadOnlyList<TerraKitScatterPrefabMapping> scatterPrefabs = null)
         {
             var snapshot = new TerraKitOutputScenePreview();
             try
             {
-                if (_root != null && ReferenceEquals(_results, results) &&
-                    _objects.All(item => item != null && item.transform.IsChildOf(_root.transform)))
+                var requestedPrefabs = BuildScatterPrefabLookup(scatterPrefabs);
+                bool mappingsMatch = scatterPrefabs == null ||
+                    (requestedPrefabs.Count == _scatterPrefabLookup.Count &&
+                     requestedPrefabs.All(pair => _scatterPrefabLookup.TryGetValue(pair.Key, out var prefab) &&
+                         prefab == pair.Value));
+                if (_root != null && ReferenceEquals(_results, results) && mappingsMatch &&
+                    _objects.Concat(_scatterObjects).All(item =>
+                        item != null && item.transform.IsChildOf(_root.transform)))
                 {
                     snapshot._root = Object.Instantiate(_root);
                     snapshot._root.name = _root.name;
                     snapshot._results = results;
+                    snapshot.PreviewNotice = PreviewNotice;
+                    snapshot._scatterPrefabLookup = new Dictionary<uint, GameObject>(_scatterPrefabLookup);
                     foreach (var item in _objects)
                     {
-                        var indices = new Stack<int>();
-                        var original = item.transform;
-                        while (original != _root.transform)
-                        {
-                            indices.Push(original.GetSiblingIndex());
-                            original = original.parent;
-                        }
-                        var copy = snapshot._root.transform;
-                        while (indices.Count > 0) copy = copy.GetChild(indices.Pop());
+                        var copy = FindSnapshotCopy(item.transform, _root.transform, snapshot._root.transform);
                         snapshot._objects.Add(copy.gameObject);
                         snapshot._objectRegions.Add(copy.gameObject, _objectRegions[item]);
                     }
-                    // Meshes and materials in this snapshot are borrowed from the live preview.
-                    // Only the snapshot objects belong to this snapshot's cleanup.
+                    foreach (var item in _scatterObjects)
+                    {
+                        var copy = FindSnapshotCopy(item.transform, _root.transform, snapshot._root.transform);
+                        snapshot._scatterObjects.Add(copy.gameObject);
+                    }
+                    // Snapshot geometry and materials are borrowed; cleanup owns only its objects.
                 }
-                else snapshot.Build(results, graphName);
+                else snapshot.Build(results, graphName, scatterPrefabs);
 
                 snapshot._exportScene = EditorSceneManager.NewPreviewScene();
                 SceneManager.MoveGameObjectToScene(snapshot._root, snapshot._exportScene);
@@ -145,6 +273,18 @@ namespace TerraKit.Editor
                 return snapshot;
             }
             catch { snapshot.Dispose(); throw; }
+        }
+
+        private static Transform FindSnapshotCopy(Transform source, Transform originalRoot, Transform copyRoot)
+        {
+            var indices = new Stack<int>();
+            while (source != originalRoot)
+            {
+                indices.Push(source.GetSiblingIndex());
+                source = source.parent;
+            }
+            while (indices.Count > 0) copyRoot = copyRoot.GetChild(indices.Pop());
+            return copyRoot;
         }
 
         internal string SaveImage(IReadOnlyList<TerraKitGeneratedRegion> results, string graphName)
@@ -156,15 +296,31 @@ namespace TerraKit.Editor
             }
         }
 
-        internal bool SavePrefab(IReadOnlyList<TerraKitGeneratedRegion> results, string graphName)
+        internal bool SavePrefab(IReadOnlyList<TerraKitGeneratedRegion> results, string graphName,
+            IReadOnlyList<TerraKitScatterPrefabMapping> scatterPrefabs = null)
         {
+            var lookup = BuildScatterPrefabLookup(scatterPrefabs);
+            var missing = results.SelectMany(region => region.Resources)
+                .Where(resource => resource.Scatter != null && resource.Scatter.Points != null)
+                .SelectMany(resource => resource.Scatter.Points)
+                .Select(point => point.PrototypeId).Distinct()
+                .Where(id => !lookup.ContainsKey(id)).OrderBy(id => id).ToArray();
+            if (missing.Length != 0)
+                throw new InvalidOperationException(
+                    "Assign one valid prefab per generated Prototype ID before saving the complete map. Missing or ambiguous IDs: " +
+                    string.Join(", ", missing.Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+
             var destination = _root != null ? _root.scene : SceneManager.GetActiveScene();
-            using (var snapshot = PrepareExport(results, graphName))
+            using (var snapshot = PrepareExport(results, graphName, scatterPrefabs))
             {
-                if (snapshot._objects.Count == 0)
-                    throw new InvalidOperationException("The map has no Mesh outputs to save.");
+                if (!snapshot.HasSceneObjects)
+                    throw new InvalidOperationException("The map has no Mesh or mapped scatter objects to save.");
+                if (!string.IsNullOrEmpty(snapshot.PreviewNotice))
+                    throw new InvalidOperationException(
+                        "The scatter preview is truncated. Reduce the scatter count or region count before saving the complete map.");
                 return snapshot.SaveEntries(snapshot._objects.ToArray(), graphName + "_Map", destination,
-                    "Save Map Prefab", "Save all Regions with their Meshes and materials as one map Prefab.", true);
+                    "Save Map Prefab", "Save all Regions with their Meshes, materials and scatter objects as one map Prefab.",
+                    true, snapshot._scatterObjects.ToArray());
             }
         }
 
@@ -195,17 +351,39 @@ namespace TerraKit.Editor
             return _objects.Where(item => _objectRegions[item] == regionIndex).ToArray();
         }
 
-        private bool SaveEntries(GameObject[] objects, string suggestedName, Scene destination,
-            string dialogTitle, string description, bool placeInScene)
+        private bool SaveEntries(
+            GameObject[] objects,
+            string suggestedName,
+            Scene destination,
+            string dialogTitle,
+            string description,
+            bool placeInScene,
+            GameObject[] scatterObjects = null)
         {
             string path = EditorUtility.SaveFilePanelInProject(
                 dialogTitle, suggestedName, "prefab", description);
-            if (string.IsNullOrEmpty(path)) return false;
 
-            return SaveEntriesToPath(objects, path, destination, placeInScene);
+            if (string.IsNullOrEmpty(path))
+                return false;
+
+            // Import folders created in the save dialog before using AssetDatabase.
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+
+            path = path.Replace('\\', '/');
+            string parent = Path.GetDirectoryName(path)?.Replace('\\', '/');
+
+            if (string.IsNullOrEmpty(parent) ||
+                !AssetDatabase.IsValidFolder(parent))
+            {
+                throw new IOException(
+                    "The save folder is not available in Unity: " + parent);
+            }
+
+            return SaveEntriesToPath(objects, path, destination, placeInScene, scatterObjects);
         }
 
-        private bool SaveEntriesToPath(GameObject[] objects, string path, Scene destination, bool placeInScene)
+        private bool SaveEntriesToPath(GameObject[] objects, string path, Scene destination, bool placeInScene,
+            GameObject[] scatterObjects = null)
         {
             // Each save owns new assets; existing exports and their instances remain unchanged.
             path = AssetDatabase.GenerateUniqueAssetPath(path);
@@ -254,6 +432,17 @@ namespace TerraKit.Editor
                     renderer.receiveShadows = sourceRenderer.receiveShadows;
                 }
 
+                foreach (var source in scatterObjects ?? Array.Empty<GameObject>())
+                {
+                    if (source == null) throw new InvalidOperationException("A scatter preview instance is missing.");
+                    var parentTransform = CopyAncestors(source.transform.parent, export.transform, ancestors);
+                    var child = Object.Instantiate(source, parentTransform, false);
+                    child.name = source.name;
+                    CopyLocalTransform(source.transform, child.transform);
+                    ClearTemporaryFlags(child);
+                    SaveScatterTransientAssets(child, folder, meshes, materials, textures, savedPaths);
+                }
+
                 export.hideFlags = HideFlags.None;
                 savedPaths.Add(prefabPath);
                 var prefab = PrefabUtility.SaveAsPrefabAsset(export, prefabPath);
@@ -283,6 +472,47 @@ namespace TerraKit.Editor
             }
             finally { if (export != null) Object.DestroyImmediate(export); }
             return true;
+        }
+
+        private static void ClearTemporaryFlags(GameObject root)
+        {
+            const HideFlags temporary = HideFlags.DontSaveInEditor | HideFlags.DontSaveInBuild |
+                HideFlags.DontUnloadUnusedAsset;
+            foreach (var transform in root.GetComponentsInChildren<Transform>(true))
+            {
+                transform.gameObject.hideFlags &= ~temporary;
+                foreach (var component in transform.GetComponents<Component>())
+                    if (component != null) component.hideFlags &= ~temporary;
+            }
+        }
+
+        private static void SaveScatterTransientAssets(GameObject root, string folder,
+            Dictionary<Mesh, Mesh> meshes, Dictionary<Material, Material> materials,
+            Dictionary<Texture, Texture> textures, List<string> savedPaths)
+        {
+            // Persistent prototype assets remain shared; temporary geometry must be saved.
+            foreach (var filter in root.GetComponentsInChildren<MeshFilter>(true))
+                filter.sharedMesh = SaveTransientMesh(filter.sharedMesh, folder, meshes, savedPaths);
+            foreach (var renderer in root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+                renderer.sharedMesh = SaveTransientMesh(renderer.sharedMesh, folder, meshes, savedPaths);
+            foreach (var collider in root.GetComponentsInChildren<MeshCollider>(true))
+                collider.sharedMesh = SaveTransientMesh(collider.sharedMesh, folder, meshes, savedPaths);
+            foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+                renderer.sharedMaterials = renderer.sharedMaterials.Select(material =>
+                    material == null || EditorUtility.IsPersistent(material)
+                        ? material : SaveMaterial(material, folder, materials, textures, savedPaths)).ToArray();
+        }
+
+        private static Mesh SaveTransientMesh(Mesh source, string folder,
+            Dictionary<Mesh, Mesh> meshes, List<string> savedPaths)
+        {
+            if (source == null || EditorUtility.IsPersistent(source)) return source;
+            if (meshes.TryGetValue(source, out var saved)) return saved;
+            saved = Object.Instantiate(source);
+            saved.hideFlags = HideFlags.None;
+            SaveNewAsset(saved, folder + "/Mesh_" + (meshes.Count + 1) + ".asset", savedPaths);
+            meshes.Add(source, saved);
+            return saved;
         }
 
         private Transform CopyAncestors(Transform source, Transform root,
@@ -353,10 +583,57 @@ namespace TerraKit.Editor
 
         public void Dispose()
         {
-            if (_root != null) Object.DestroyImmediate(_root);
-            foreach (var mesh in _meshes) if (mesh != null) Object.DestroyImmediate(mesh);
-            _objects.Clear(); _objectRegions.Clear(); _meshes.Clear(); _root = null; _results = null;
-            if (_exportScene.IsValid()) EditorSceneManager.ClosePreviewScene(_exportScene);
+            // Release selected preview objects before destroying them.
+            var previousSelection = Selection.objects;
+
+            var remainingSelection = previousSelection.Where(selected =>
+            {
+                if (selected == null)
+                    return false;
+
+                if (selected is Mesh mesh && _meshes.Contains(mesh))
+                    return false;
+
+                GameObject gameObject = selected as GameObject;
+
+                if (selected is Component component)
+                    gameObject = component.gameObject;
+
+                if (gameObject == null || _root == null)
+                    return true;
+
+                return gameObject != _root &&
+                    !gameObject.transform.IsChildOf(_root.transform);
+            }).ToArray();
+
+            if (remainingSelection.Length != previousSelection.Length)
+            {
+                Selection.objects = remainingSelection;
+                // Release cached Inspector editors while their preview targets still exist.
+                ActiveEditorTracker.sharedTracker.ForceRebuild();
+            }
+
+            if (_root != null)
+                Object.DestroyImmediate(_root);
+
+            foreach (var mesh in _meshes)
+            {
+                if (mesh != null)
+                    Object.DestroyImmediate(mesh);
+            }
+
+            _objects.Clear();
+            _scatterObjects.Clear();
+            _scatterPrefabLookup.Clear();
+            PreviewNotice = null;
+            _objectRegions.Clear();
+            _meshes.Clear();
+            _root = null;
+            _results = null;
+
+            if (_exportScene.IsValid())
+                EditorSceneManager.ClosePreviewScene(_exportScene);
+
             _exportScene = default;
         }
     }
