@@ -287,6 +287,78 @@ def generate_meta_files(stage: Path, overrides: dict[str, str]) -> None:
         target.write_text(content, encoding="utf-8")
 
 
+GUID_PLACEHOLDER = re.compile(r"\{\{GUID:([^{}\r\n]+)\}\}")
+
+
+def resolve_guid_placeholders(stage: Path) -> None:
+    """Resolve asset path placeholders using generated Unity .meta files."""
+    guid_cache: dict[str, str] = {}
+
+    for asset in sorted(stage.rglob("*")):
+        if not asset.is_file() or asset.name.endswith(".meta"):
+            continue
+
+        raw = asset.read_bytes()
+        if b"{{GUID:" not in raw:
+            continue
+
+        relative = asset.relative_to(stage).as_posix()
+
+        try:
+            content = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(
+                f"GUID placeholder in non-text asset: {relative}"
+            ) from exc
+
+        def replace(match: re.Match[str]) -> str:
+            target = match.group(1)
+            pure = PurePosixPath(target)
+
+            if (
+                not target
+                or target.startswith("/")
+                or "\\" in target
+                or any(part in ("", ".", "..") for part in target.split("/"))
+                or target.endswith(".meta")
+                or str(pure) != target
+            ):
+                raise ValueError(
+                    f"Invalid GUID asset path {target!r} in {relative}"
+                )
+
+            if target not in guid_cache:
+                target_asset = stage / target
+                meta = stage / (target + ".meta")
+
+                if not target_asset.exists() or not meta.is_file():
+                    raise ValueError(
+                        f"Unknown GUID reference {target!r} in {relative}"
+                    )
+
+                found = re.search(
+                    r"(?m)^guid:\s*([0-9a-fA-F]{32})\s*$",
+                    meta.read_text(encoding="utf-8"),
+                )
+
+                if found is None:
+                    raise ValueError(
+                        f"Invalid generated metadata for {target!r} in {relative}"
+                    )
+
+                guid_cache[target] = found.group(1).lower()
+
+            return guid_cache[target]
+
+        resolved = GUID_PLACEHOLDER.sub(replace, content)
+
+        if "{{GUID:" in resolved:
+            raise ValueError(
+                f"Unresolved GUID placeholder in {relative}"
+            )
+
+        asset.write_bytes(resolved.encode("utf-8"))
+
 def create_stage(root: Path, stage: Path, binaries: dict[str, bytes],
                  lipo: str, overrides: dict[str, str] | None = None) -> None:
     overrides = read_guid_map(root) if overrides is None else overrides
@@ -317,6 +389,7 @@ def create_stage(root: Path, stage: Path, binaries: dict[str, bytes],
         subprocess.run([lipo, str(macos), "-verify_arch", "x86_64", "arm64"], check=True)
 
     generate_meta_files(stage, overrides)
+    resolve_guid_placeholders(stage)
 
 
 def make_tarball(stage: Path, destination: Path) -> None:
