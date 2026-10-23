@@ -374,17 +374,35 @@ namespace TerraKit.Editor
 
         private void LoadStylesheet()
         {
-            // Resolve by GUID rather than a project-relative path so this works both as an embedded/local UPM package and when the source lives under Assets/.
-            const string styleGuid = "c25911b1c96c042d99eecbaaa360179a";
-            var stylePath = AssetDatabase.GUIDToAssetPath(styleGuid);
-            var stylesheet = string.IsNullOrEmpty(stylePath)
-                ? null
-                : AssetDatabase.LoadAssetAtPath<StyleSheet>(stylePath);
+            const string packageStylePath =
+                "Packages/com.terrakit.unity/Editor/Styling/TerraKitGraph.uss";
 
-            if (stylesheet != null)
+            var stylesheet =
+                AssetDatabase.LoadAssetAtPath<StyleSheet>(packageStylePath);
+
+            // Retain the original lookup for projects using the old asset GUID.
+            if (stylesheet == null)
             {
-                rootVisualElement.styleSheets.Add(stylesheet);
+                const string originalStyleGuid =
+                    "c25911b1c96c042d99eecbaaa360179a";
+
+                string originalPath =
+                    AssetDatabase.GUIDToAssetPath(originalStyleGuid);
+
+                if (!string.IsNullOrEmpty(originalPath))
+                {
+                    stylesheet =
+                        AssetDatabase.LoadAssetAtPath<StyleSheet>(originalPath);
+                }
             }
+
+            if (stylesheet == null)
+            {
+                Debug.LogWarning("TerraKit Graph stylesheet could not be loaded.");
+                return;
+            }
+
+            rootVisualElement.styleSheets.Add(stylesheet);
         }
 
         private void CreateGraphAsset()
@@ -986,9 +1004,7 @@ namespace TerraKit.Editor
             }
 
             inputField.AddToClassList("terrakit-parameter-input");
-            inputField.tooltip = description +
-                                 "\nValid value: " + validValueHint +
-                                 "\nDefault: " + defaultValue;
+            inputField.tooltip = string.Empty;
             fieldContainer.Add(inputField);
 
             if (!string.IsNullOrEmpty(description))
@@ -1141,33 +1157,12 @@ namespace TerraKit.Editor
             SetStatus(
                 StatusType.Info,
                 "TerraKit — Quick Start",
-                "Build a graph, generate terrain, preview the results, and save or export what you need.\n\n" +
-
-                "1. Check the backend connection: Tools > TerraKit > Check Backend Connection.\n\n" +
-
-                "2. Click New Graph. Right-click the canvas to add stages, then connect each output to the next stage's required input.\n\n" +
-
-                "3. Select a node to edit its parameters in the Inspector. Click Save to save the graph, and use Validate to check for missing inputs or invalid settings.\n\n" +
-
-                "4. Click Generator. Choose the generation settings, then click Generate Map.\n\n" +
-
-                "5. In Results, use Region and Output to inspect generated resources. HeightField outputs are shown in Data Preview. " +
-                "For Mesh outputs, click Show Map Preview to view the complete map.\n\n" +
-
-                "6. Save Mesh saves all Mesh outputs and materials in the selected Region, with a Region Prefab that preserves material assignments. " +
-                "Save Prefab saves all Regions and their materials as one reusable map Prefab.\n\n" +
-
-                "7. Export JSON saves the generated data and request settings. " +
-                "Export PNG saves an image of the complete map. Heightmap and Slice Image export the selected grid data as PNG.\n\n" +
-
-                "Regions X/Y controls the map size in regions. Regions are arranged automatically around the Unity origin; " +
-                "set both to 1 for a single region.\n\n" +
-
-                "LOD controls detail level. Cell Width/Height controls the region resolution, and Base Spacing controls the distance between samples.\n\n" +
-
-                "3D mode requires compatible 3D stages. The current built-in HeightField stages are designed for 2D generation.\n\n" +
-
-                "Scene previews are temporary. Save the result if you want to keep it."
+                "1. Create or select a Graph. Right-click to add nodes, connect ports, and edit node parameters in the Inspector. Save and Validate.\n\n" +
+                "2. Open Generator, set Seed and region settings, then click Generate Map. Regions are arranged around the Unity origin.\n\n" +
+                "3. Choose Region and Output to inspect results. Save Mesh saves the selected Region's Meshes and materials; Save Prefab saves the whole map, including mapped scatter.\n\n" +
+                "Auto Preview regenerates 0.6 seconds after edits stop and keeps the Scene view unchanged. Select the Preview root and press F over Scene to frame the map.\n\n" +
+                "Map scatter Prototype IDs to Prefabs in Generator, then Generate Map after mapping changes. Export JSON saves the selected output; Export PNG captures map Meshes without scatter.\n\n" +
+                "Closing Generator, reloading scripts or entering Play mode clears temporary results and turns Auto Preview off. Saved maps remain unchanged."
             );
         }
 
